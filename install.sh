@@ -26,14 +26,7 @@ echo ""
 echo "Building and installing ssh-hub..."
 cargo install --path "$SCRIPT_DIR"
 
-# Resolve absolute path to the binary (MCP servers need it since they don't inherit shell PATH)
-if command -v ssh-hub &>/dev/null; then
-    SSH_HUB_BIN="$(command -v ssh-hub)"
-else
-    SSH_HUB_BIN="$HOME/.cargo/bin/ssh-hub"
-fi
-
-if [ ! -x "$SSH_HUB_BIN" ]; then
+if ! command -v ssh-hub &>/dev/null; then
     echo ""
     echo "Error: ssh-hub binary not found after install."
     echo ""
@@ -44,7 +37,9 @@ if [ ! -x "$SSH_HUB_BIN" ]; then
     exit 1
 fi
 
-echo "Installed: $($SSH_HUB_BIN --version) at $SSH_HUB_BIN"
+SSH_HUB_BIN="ssh-hub"
+
+echo "Installed: $(ssh-hub --version)"
 
 # ── MCP config target ─────────────────────────────────────────────────
 
