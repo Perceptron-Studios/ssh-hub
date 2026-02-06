@@ -1,9 +1,10 @@
-use anyhow::{anyhow, Result};
-use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::server_registry::{AuthMethod, ServerEntry};
+use anyhow::{anyhow, Result};
+use clap::{Parser, Subcommand};
+
 use crate::connection::ConnectionParams;
+use crate::server_registry::{AuthMethod, ServerEntry};
 
 /// MCP server for remote SSH sessions
 #[derive(Parser, Debug)]
@@ -20,31 +21,17 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Interactive setup for a server's credentials
-    Setup {
-        /// Server name (alias for config)
-        name: String,
-
-        /// SSH connection string: user@host:/path or user@host:port:/path
-        #[arg(long)]
-        connection: Option<String>,
-
-        /// SSH port
-        #[arg(short = 'p', long)]
-        port: Option<u16>,
-
-        /// Path to SSH private key
-        #[arg(short = 'i', long)]
-        identity: Option<PathBuf>,
-    },
-
-    /// Add a server to the config (without interactive credential setup)
+    /// Add a server to the config (or reconfigure an existing one)
     Add {
         /// Server name (alias for config)
         name: String,
 
         /// SSH connection string: user@host:/path or user@host:port:/path
         connection: String,
+
+        /// SSH port override
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
 
         /// Path to SSH private key
         #[arg(short = 'i', long)]
@@ -59,7 +46,26 @@ pub enum Command {
 
     /// List all configured servers
     List,
+
+    /// Register ssh-hub as an MCP server in a project directory
+    #[command(name = "mcp-install")]
+    McpInstall {
+        /// Target project directory (default: current working directory)
+        #[arg(default_value = ".")]
+        directory: PathBuf,
+
+        /// Configure for Claude Code (.mcp.json)
+        #[arg(long)]
+        claude: bool,
+
+        /// Configure for Codex (.codex/config.toml)
+        #[arg(long)]
+        codex: bool,
+    },
 }
+
+const DEFAULT_PORT: u16 = 22;
+const DEFAULT_REMOTE_PATH: &str = "~";
 
 /// Parsed SSH connection details
 #[derive(Debug, Clone)]
@@ -70,11 +76,17 @@ pub struct ConnectionInfo {
     pub remote_path: String,
 }
 
-/// Parse connection string format: user@host:/path or user@host:port:/path
+/// Parse connection string format:
+///   user@host              — no path, default port
+///   user@host:/path        — with path, default port
+///   user@host:port         — no path, custom port
+///   user@host:port:/path   — with path, custom port
 pub fn parse_connection_string(conn: &str, port_override: Option<u16>) -> Result<ConnectionInfo> {
-    let (user_host, rest) = conn
-        .split_once(':')
-        .ok_or_else(|| anyhow!("Invalid connection string: missing ':' after host"))?;
+    // Split user@host from the rest (everything after the first ':')
+    let (user_host, rest) = match conn.split_once(':') {
+        Some(parts) => parts,
+        None => (conn, ""),  // no colon: just user@host
+    };
 
     let (user, host) = user_host
         .split_once('@')
@@ -87,24 +99,36 @@ pub fn parse_connection_string(conn: &str, port_override: Option<u16>) -> Result
         return Err(anyhow!("Invalid connection string: empty hostname"));
     }
 
-    let (port, remote_path) = if rest.starts_with('/') {
-        (22, rest.to_string())
-    } else {
-        let (port_str, path) = rest
-            .split_once(':')
-            .ok_or_else(|| anyhow!("Invalid connection string: expected port:path or /path"))?;
-
+    let (port, remote_path) = if rest.is_empty() {
+        // user@host
+        (DEFAULT_PORT, DEFAULT_REMOTE_PATH.to_string())
+    } else if rest.starts_with('/') {
+        // user@host:/path
+        (DEFAULT_PORT, rest.to_string())
+    } else if let Some((port_str, path)) = rest.split_once(':') {
+        // user@host:port:/path or user@host:port:
         let port: u16 = port_str
             .parse()
             .map_err(|_| anyhow!("Invalid port number: {}", port_str))?;
 
-        if !path.starts_with('/') {
+        if path.is_empty() {
+            (port, DEFAULT_REMOTE_PATH.to_string())
+        } else if path.starts_with('/') {
+            (port, path.to_string())
+        } else {
             return Err(anyhow!(
                 "Invalid connection string: path must start with '/'"
             ));
         }
-
-        (port, path.to_string())
+    } else {
+        // user@host:port (no second colon, rest is just a number)
+        let port: u16 = rest.parse().map_err(|_| {
+            anyhow!(
+                "Invalid connection string: '{}' is not a port number or path",
+                rest
+            )
+        })?;
+        (port, DEFAULT_REMOTE_PATH.to_string())
     };
 
     Ok(ConnectionInfo {
@@ -122,9 +146,7 @@ pub fn params_from_config(name: &str, entry: &ServerEntry) -> ConnectionParams {
         user: entry.user.clone(),
         port: entry.port,
         remote_path: entry.remote_path.clone(),
-        identity: entry.identity.as_ref().map(|p| {
-            PathBuf::from(shellexpand_tilde(p))
-        }),
+        identity: entry.identity.as_ref().map(|p| PathBuf::from(shellexpand_tilde(p))),
         auth_method: entry.auth.clone(),
         server_name: Some(name.to_string()),
     }

@@ -40,5 +40,5 @@ fi
 echo "Installed: $(ssh-hub --version)"
 echo ""
 echo "Next steps:"
-echo "  1. Add a remote server:  ssh-hub setup myserver --connection user@host:/path"
-echo "  2. Add the MCP to a project:  claude mcp add ssh-hub -- ssh-hub"
+echo "  1. Add a remote server:  ssh-hub add myserver user@host:/path"
+echo "  2. Add the MCP to a project:  ssh-hub mcp-install /path/to/project"

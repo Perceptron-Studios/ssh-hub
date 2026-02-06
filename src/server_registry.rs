@@ -15,6 +15,7 @@ pub struct ServerEntry {
     pub user: String,
     #[serde(default = "default_port")]
     pub port: u16,
+    #[serde(default = "default_remote_path")]
     pub remote_path: String,
     pub identity: Option<String>,
     #[serde(default)]
@@ -32,6 +33,10 @@ pub enum AuthMethod {
 
 fn default_port() -> u16 {
     22
+}
+
+fn default_remote_path() -> String {
+    "~".to_string()
 }
 
 impl ServerRegistry {

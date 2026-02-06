@@ -1,11 +1,15 @@
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
 use anyhow::Result;
 use clap::Parser;
+use colored::Colorize;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use ssh_hub::cli::{self, Cli, Command};
-use ssh_hub::server_registry::{self as server_registry, ServerRegistry};
 use ssh_hub::connection;
 use ssh_hub::server::RemoteSessionServer;
+use ssh_hub::server_registry::{self, ServerRegistry};
 
 fn init_logging(verbose: bool) {
     let filter = if verbose {
@@ -23,11 +27,11 @@ fn init_logging(verbose: bool) {
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    init_logging(cli.verbose);
 
     match cli.command {
         // Default: start MCP server
         None => {
-            init_logging(cli.verbose);
             tracing::info!("Starting ssh-hub MCP server");
 
             let config = ServerRegistry::load().unwrap_or_else(|e| {
@@ -41,23 +45,14 @@ async fn main() -> Result<()> {
             server.run().await?;
         }
 
-        // Interactive setup
-        Some(Command::Setup {
+        // Add (or reconfigure) a server
+        Some(Command::Add {
             name,
             connection,
             port,
             identity,
         }) => {
-            run_setup(name, connection, port, identity).await?;
-        }
-
-        // Add server to config
-        Some(Command::Add {
-            name,
-            connection,
-            identity,
-        }) => {
-            run_add(name, connection, identity)?;
+            run_add(name, connection, port, identity).await?;
         }
 
         // Remove server from config
@@ -69,75 +64,111 @@ async fn main() -> Result<()> {
         Some(Command::List) => {
             run_list()?;
         }
+
+        // Register MCP in a project directory
+        Some(Command::McpInstall {
+            directory,
+            claude,
+            codex,
+        }) => {
+            run_mcp_install(directory, claude, codex)?;
+        }
     }
 
     Ok(())
 }
 
-async fn run_setup(
+async fn run_add(
     name: String,
-    connection: Option<String>,
+    connection: String,
     port: Option<u16>,
-    identity: Option<std::path::PathBuf>,
+    identity: Option<PathBuf>,
 ) -> Result<()> {
     let mut config = ServerRegistry::load().unwrap_or_default();
 
     // If server already exists, show current config
     if let Some(existing) = config.get(&name) {
-        println!("Server '{}' already configured:", name);
-        println!("  host: {}", existing.host);
-        println!("  user: {}", existing.user);
-        println!("  port: {}", existing.port);
-        println!("  path: {}", existing.remote_path);
-        println!("  auth: {:?}", existing.auth);
+        println!(
+            "{} Server {} already configured:",
+            "!".yellow().bold(),
+            name.bold(),
+        );
+        println!("  {} {}", "host:".dimmed(), existing.host);
+        println!("  {} {}", "user:".dimmed(), existing.user);
+        println!("  {} {}", "port:".dimmed(), existing.port);
+        println!("  {} {}", "path:".dimmed(), existing.remote_path);
+        println!("  {} {:?}", "auth:".dimmed(), existing.auth);
+        println!();
+
+        print!("  Overwrite? {}: ", "[y/N]".dimmed());
+        std::io::stdout().flush()?;
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !answer.trim().eq_ignore_ascii_case("y") {
+            println!("  {}", "Aborted.".dimmed());
+            return Ok(());
+        }
         println!();
     }
 
-    // Parse connection string if provided
-    let conn_info = if let Some(ref conn_str) = connection {
-        Some(cli::parse_connection_string(conn_str, port)?)
-    } else if let Some(existing) = config.get(&name) {
-        Some(cli::ConnectionInfo {
-            user: existing.user.clone(),
-            host: existing.host.clone(),
-            port: port.unwrap_or(existing.port),
-            remote_path: existing.remote_path.clone(),
-        })
-    } else {
-        println!("No connection string provided and server '{}' not in config.", name);
-        println!("Usage: ssh-hub setup {} --connection user@host:/path", name);
-        return Ok(());
-    };
+    let conn_info = cli::parse_connection_string(&connection, port)?;
 
-    let conn_info = conn_info.unwrap();
+    println!(
+        "{} Adding server {}",
+        "+".green().bold(),
+        name.bold(),
+    );
+    println!(
+        "  {} {}@{}:{}",
+        "connect:".dimmed(),
+        conn_info.user.cyan(),
+        conn_info.host.cyan(),
+        conn_info.port.to_string().cyan(),
+    );
+    println!(
+        "  {}    {}",
+        "path:".dimmed(),
+        conn_info.remote_path.cyan(),
+    );
 
-    println!("Configuring server '{}':", name);
-    println!("  {}@{}:{} -> {}", conn_info.user, conn_info.host, conn_info.port, conn_info.remote_path);
+    let auth_method = server_registry::AuthMethod::Auto;
 
-    // Ask for auth method
-    println!();
-    println!("Authentication method:");
-    println!("  1) SSH key (default)");
-    println!("  2) SSH agent");
-    print!("Choose [1]: ");
-    use std::io::Write;
-    std::io::stdout().flush()?;
+    // If identity file provided, add to ssh-agent so the MCP server can use it at runtime
+    if let Some(ref id) = identity {
+        println!();
+        println!(
+            "{} Adding key to ssh-agent: {}",
+            ">".blue().bold(),
+            id.display().to_string().underline(),
+        );
 
-    let mut choice = String::new();
-    std::io::stdin().read_line(&mut choice)?;
-    let choice = choice.trim();
-
-    let auth_method = match choice {
-        "2" => server_registry::AuthMethod::Agent,
-        _ => {
-            if let Some(ref id) = identity {
-                println!("Using identity file: {:?}", id);
+        let result = std::process::Command::new("ssh-add").arg(id).status();
+        match result {
+            Ok(s) if s.success() => {
+                println!("  {} Key added to agent", "ok".green());
             }
-            server_registry::AuthMethod::Key
+            Ok(s) => {
+                println!(
+                    "  {} ssh-add exited with code {}",
+                    "warn".yellow(),
+                    s.code().unwrap_or(-1),
+                );
+            }
+            Err(ref e) => {
+                println!("  {} failed to run ssh-add: {}", "warn".yellow(), e);
+            }
         }
-    };
 
-    // Save config
+        // Surface the manual hint for any failure
+        if !matches!(result, Ok(s) if s.success()) {
+            println!(
+                "  You may need to run {} manually.",
+                format!("ssh-add {}", id.display()).dimmed(),
+            );
+        }
+    }
+
+    // Build the entry (but don't save yet — test connection first)
     let entry = server_registry::ServerEntry {
         host: conn_info.host,
         user: conn_info.user,
@@ -147,73 +178,42 @@ async fn run_setup(
         auth: auth_method,
     };
 
-    config.insert(name.clone(), entry);
-    config.save()?;
-    println!("Config saved to {:?}", ServerRegistry::config_path()?);
+    // Test connection before saving
+    let params = cli::params_from_config(&name, &entry);
 
-    // Test connection
-    println!();
-    print!("Test connection? [Y/n]: ");
-    std::io::stdout().flush()?;
+    match connection::SshConnection::connect(params).await {
+        Ok(conn) => {
+            let _ = conn.exec("echo 'ssh-hub test OK'", Some(10000)).await;
 
-    let mut test_choice = String::new();
-    std::io::stdin().read_line(&mut test_choice)?;
+            config.insert(name.clone(), entry);
+            config.save()?;
+            println!("  {} Server {} is up and running", "ok".green(), name.bold());
+        }
+        Err(_) => {
+            println!("  {} Server {} failed authentication", "failed".red(), name.bold());
+            println!();
 
-    if !test_choice.trim().eq_ignore_ascii_case("n") {
-        println!("Testing connection...");
-        let entry = config.get(&name).unwrap();
-        let params = cli::params_from_config(&name, entry);
+            print!("  Save server config anyway? {}: ", "[y/N]".dimmed());
+            std::io::stdout().flush()?;
+            let mut save_choice = String::new();
+            std::io::stdin().read_line(&mut save_choice)?;
 
-        match connection::SshConnection::connect(params).await {
-            Ok(conn) => {
-                println!("Connection successful!");
-                // Run a quick test
-                match conn.exec("echo 'ssh-hub test OK'", Some(10000)).await {
-                    Ok(result) => println!("Remote exec test: {}", result.stdout.trim()),
-                    Err(e) => println!("Warning: connected but exec failed: {}", e),
-                }
-            }
-            Err(e) => {
-                println!("Connection failed: {}", e);
-                println!("Check your credentials and try again.");
+            if save_choice.trim().eq_ignore_ascii_case("y") {
+                config.insert(name.clone(), entry);
+                config.save()?;
+                println!(
+                    "  {} Saved to {}",
+                    "ok".green(),
+                    ServerRegistry::config_path()?.display().to_string().dimmed(),
+                );
+            } else {
+                println!(
+                    "  {} Server not saved. Fix credentials and try again.",
+                    "x".red(),
+                );
             }
         }
     }
-
-    println!();
-    println!("Setup complete. Add to Claude Code with:");
-    println!("  claude mcp add remote -- ssh-hub");
-
-    Ok(())
-}
-
-fn run_add(
-    name: String,
-    connection: String,
-    identity: Option<std::path::PathBuf>,
-) -> Result<()> {
-    let mut config = ServerRegistry::load().unwrap_or_default();
-
-    if config.get(&name).is_some() {
-        println!("Server '{}' already exists. Use 'setup' to reconfigure or 'remove' first.", name);
-        return Ok(());
-    }
-
-    let conn_info = cli::parse_connection_string(&connection, None)?;
-
-    let entry = server_registry::ServerEntry {
-        host: conn_info.host,
-        user: conn_info.user,
-        port: conn_info.port,
-        remote_path: conn_info.remote_path,
-        identity: identity.map(|p| p.to_string_lossy().to_string()),
-        auth: server_registry::AuthMethod::Auto,
-    };
-
-    config.insert(name.clone(), entry);
-    config.save()?;
-    println!("Server '{}' added to config.", name);
-    println!("Config saved to {:?}", ServerRegistry::config_path()?);
 
     Ok(())
 }
@@ -223,9 +223,13 @@ fn run_remove(name: String) -> Result<()> {
 
     if config.remove(&name).is_some() {
         config.save()?;
-        println!("Server '{}' removed from config.", name);
+        println!("{} Server {} removed.", "-".red().bold(), name.bold());
     } else {
-        println!("Server '{}' not found in config.", name);
+        println!(
+            "{} Server {} not found in config.",
+            "!".yellow().bold(),
+            name.bold(),
+        );
     }
 
     Ok(())
@@ -235,17 +239,128 @@ fn run_list() -> Result<()> {
     let config = ServerRegistry::load().unwrap_or_default();
 
     if config.servers.is_empty() {
-        println!("No servers configured.");
-        println!("Use 'ssh-hub add <name> user@host:/path' to add one.");
+        println!("{}", "No servers configured.".dimmed());
+        println!(
+            "Run {} to add one.",
+            "ssh-hub add <name> user@host:/path".bold(),
+        );
         return Ok(());
     }
 
     for (name, entry) in &config.servers {
         println!(
-            "  {} -> {}@{}:{} (path: {}, auth: {:?})",
-            name, entry.user, entry.host, entry.port, entry.remote_path, entry.auth
+            "  {} {} {}@{}:{} {}",
+            name.bold(),
+            "->".dimmed(),
+            entry.user.cyan(),
+            entry.host.cyan(),
+            entry.port.to_string().cyan(),
+            format!("(path: {}, auth: {:?})", entry.remote_path, entry.auth).dimmed(),
         );
     }
 
+    Ok(())
+}
+
+fn run_mcp_install(directory: PathBuf, claude: bool, codex: bool) -> Result<()> {
+    // When neither flag is provided, configure both
+    let (do_claude, do_codex) = if !claude && !codex {
+        (true, true)
+    } else {
+        (claude, codex)
+    };
+
+    let target = std::fs::canonicalize(&directory)
+        .map_err(|e| anyhow::anyhow!("Cannot resolve directory '{}': {}", directory.display(), e))?;
+
+    if !target.is_dir() {
+        return Err(anyhow::anyhow!("'{}' is not a directory", target.display()));
+    }
+
+    if do_claude {
+        install_claude_config(&target)?;
+    }
+    if do_codex {
+        install_codex_config(&target)?;
+    }
+
+    Ok(())
+}
+
+fn install_claude_config(target: &Path) -> Result<()> {
+    let path = target.join(".mcp.json");
+
+    let mut root: serde_json::Value = if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&content)
+            .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", path.display(), e))?
+    } else {
+        serde_json::json!({})
+    };
+
+    let servers = root
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!(".mcp.json root is not a JSON object"))?
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}));
+
+    let servers_map = servers
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("\"mcpServers\" is not a JSON object"))?;
+
+    servers_map.insert(
+        "ssh-hub".to_string(),
+        serde_json::json!({
+            "command": "ssh-hub",
+            "args": []
+        }),
+    );
+
+    let output = serde_json::to_string_pretty(&root)? + "\n";
+    std::fs::write(&path, output)?;
+
+    println!(
+        "  {} Claude Code: {}",
+        "ok".green(),
+        path.display().to_string().dimmed(),
+    );
+    Ok(())
+}
+
+fn install_codex_config(target: &Path) -> Result<()> {
+    let codex_dir = target.join(".codex");
+    let path = codex_dir.join("config.toml");
+
+    let mut doc: toml::Table = if path.exists() {
+        let content = std::fs::read_to_string(&path)?;
+        content.parse::<toml::Table>()
+            .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", path.display(), e))?
+    } else {
+        toml::Table::new()
+    };
+
+    let mcp_servers = doc
+        .entry("mcp_servers")
+        .or_insert_with(|| toml::Value::Table(toml::Table::new()));
+
+    let servers_table = mcp_servers
+        .as_table_mut()
+        .ok_or_else(|| anyhow::anyhow!("\"mcp_servers\" is not a TOML table"))?;
+
+    let mut entry = toml::Table::new();
+    entry.insert("command".to_string(), toml::Value::String("ssh-hub".to_string()));
+    entry.insert("args".to_string(), toml::Value::Array(vec![]));
+
+    servers_table.insert("ssh-hub".to_string(), toml::Value::Table(entry));
+
+    std::fs::create_dir_all(&codex_dir)?;
+    let output = toml::to_string_pretty(&doc)?;
+    std::fs::write(&path, output)?;
+
+    println!(
+        "  {} Codex: {}",
+        "ok".green(),
+        path.display().to_string().dimmed(),
+    );
     Ok(())
 }

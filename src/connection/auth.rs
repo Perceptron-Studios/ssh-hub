@@ -1,8 +1,10 @@
+use std::path::Path;
+use std::sync::Arc;
+
 use anyhow::{anyhow, Context, Result};
 use russh::client::Handle;
 use russh::keys::agent::client::AgentClient;
-use russh::keys::{load_secret_key, PrivateKeyWithHashAlg};
-use std::sync::Arc;
+use russh::keys::{load_secret_key, Algorithm, HashAlg, PrivateKeyWithHashAlg, PublicKey};
 
 use super::session::{ConnectionParams, SshHandler};
 
@@ -47,7 +49,7 @@ async fn authenticate_auto(
     if let Some(key_path) = &params.identity {
         tracing::debug!("Trying identity file: {:?}", key_path);
         if try_key_auth(session, &params.user, key_path).await? {
-            tracing::info!("Authenticated via identity file");
+            tracing::debug!("Authenticated via identity file");
             return Ok(());
         }
         methods_tried.push("identity file");
@@ -62,7 +64,7 @@ async fn authenticate_auto(
         if let Some(key_path) = key_path {
             tracing::debug!("Trying default key: {:?}", key_path);
             if try_key_auth(session, &params.user, &key_path).await? {
-                tracing::info!("Authenticated via {:?}", key_path);
+                tracing::debug!("Authenticated via {:?}", key_path);
                 return Ok(());
             }
         }
@@ -70,9 +72,36 @@ async fn authenticate_auto(
     methods_tried.push("default keys");
 
     Err(anyhow!(
-        "Authentication failed. Tried: {}. Run 'ssh-hub setup <name>' to configure credentials.",
+        "Authentication failed. Tried: {}. Check your credentials and run 'ssh-hub add' to reconfigure.",
         methods_tried.join(", ")
     ))
+}
+
+/// Determine the best RSA hash algorithm supported by the server.
+/// Returns None for non-RSA keys or if the server doesn't advertise preferences.
+async fn rsa_hash_for_key(
+    session: &mut Handle<SshHandler>,
+    key: &PublicKey,
+) -> Option<HashAlg> {
+    if !matches!(key.algorithm(), Algorithm::Rsa { .. }) {
+        return None;
+    }
+
+    match session.best_supported_rsa_hash().await {
+        Ok(Some(hash_alg)) => {
+            tracing::debug!("Server prefers RSA hash: {:?}", hash_alg);
+            hash_alg
+        }
+        Ok(None) => {
+            // Server didn't advertise — try sha2-256 as a safe default
+            tracing::debug!("Server didn't advertise RSA hash preference, defaulting to SHA-256");
+            Some(HashAlg::Sha256)
+        }
+        Err(e) => {
+            tracing::debug!("Failed to query server RSA hash support: {}", e);
+            Some(HashAlg::Sha256)
+        }
+    }
 }
 
 /// Try SSH agent authentication.
@@ -90,13 +119,25 @@ async fn try_agent_auth(
         return Err(anyhow!("SSH agent has no keys. Run 'ssh-add' first."));
     }
 
-    for key in &identities {
-        match session.authenticate_publickey_with(user, key.clone(), None, &mut agent).await {
+    tracing::debug!("SSH agent has {} key(s)", identities.len());
+
+    for (i, key) in identities.iter().enumerate() {
+        let hash_alg = rsa_hash_for_key(session, key).await;
+        tracing::debug!(
+            "Trying agent key {}/{}: {:?} (hash: {:?})",
+            i + 1, identities.len(), key.algorithm(), hash_alg,
+        );
+        match session.authenticate_publickey_with(user, key.clone(), hash_alg, &mut agent).await {
             Ok(result) if result.success() => {
-                tracing::info!("Authenticated via SSH agent");
+                tracing::debug!("Authenticated via SSH agent (key {}/{})", i + 1, identities.len());
                 return Ok(());
             }
-            _ => continue,
+            Ok(result) => {
+                tracing::debug!("Agent key {}/{} rejected by server: {:?}", i + 1, identities.len(), result);
+            }
+            Err(e) => {
+                tracing::debug!("Agent key {}/{} error: {}", i + 1, identities.len(), e);
+            }
         }
     }
 
@@ -107,7 +148,7 @@ async fn try_agent_auth(
 async fn try_key_auth(
     session: &mut Handle<SshHandler>,
     user: &str,
-    key_path: &std::path::PathBuf,
+    key_path: &Path,
 ) -> Result<bool> {
     let key = match load_secret_key(key_path, None) {
         Ok(k) => k,
@@ -117,7 +158,8 @@ async fn try_key_auth(
         }
     };
 
-    let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), None);
+    let hash_alg = rsa_hash_for_key(session, key.public_key()).await;
+    let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
 
     match session.authenticate_publickey(user, key_with_alg).await {
         Ok(result) => {

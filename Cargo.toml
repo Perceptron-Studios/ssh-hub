@@ -38,10 +38,14 @@ glob = "0.3"
 md-5 = "0.10"
 async-trait = "0.1"
 dirs = "5"
+colored = "3.1.1"
 
 [lib]
 name = "ssh_hub"
 path = "src/lib.rs"
+
+[dev-dependencies]
+tempfile = "3"
 
 [[bin]]
 name = "ssh-hub"

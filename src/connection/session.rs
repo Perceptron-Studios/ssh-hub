@@ -1,10 +1,10 @@
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use anyhow::{anyhow, Context, Result};
 use russh::client::{self, Handle};
 use russh::keys::PublicKey;
 use russh::ChannelMsg;
-use std::future::Future;
-use std::path::PathBuf;
-use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::server_registry::AuthMethod;
@@ -30,15 +30,13 @@ pub(super) struct SshHandler;
 impl client::Handler for SshHandler {
     type Error = anyhow::Error;
 
-    fn check_server_key(
+    // TODO: Implement proper host key verification
+    async fn check_server_key(
         &mut self,
         _server_public_key: &PublicKey,
-    ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
-        // TODO: Implement proper host key verification
-        async {
-            tracing::warn!("Accepting server key without verification");
-            Ok(true)
-        }
+    ) -> Result<bool, Self::Error> {
+        tracing::debug!("Accepting server key without verification");
+        Ok(true)
     }
 }
 
@@ -51,7 +49,7 @@ pub struct SshConnection {
 impl SshConnection {
     /// Establish a new SSH connection.
     pub async fn connect(params: ConnectionParams) -> Result<Self> {
-        tracing::info!(
+        tracing::debug!(
             "Connecting to {}@{}:{} (path: {})",
             params.user,
             params.host,
@@ -69,7 +67,7 @@ impl SshConnection {
 
         auth::authenticate(&mut session, &params).await?;
 
-        tracing::info!("SSH connection established");
+        tracing::debug!("SSH connection established");
 
         Ok(Self {
             session: Arc::new(Mutex::new(session)),
