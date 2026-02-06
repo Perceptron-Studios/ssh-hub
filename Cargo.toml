@@ -12,8 +12,6 @@ rmcp = { version = "0.13", features = ["server", "transport-io"] }
 
 # SSH
 russh = "0.50"
-russh-keys = "0.48"
-ssh-key = "0.6"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -31,12 +29,9 @@ toml = "0.8"
 
 # Utils
 anyhow = "1"
-thiserror = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-glob = "0.3"
 md-5 = "0.10"
-async-trait = "0.1"
 dirs = "5"
 colored = "3.1.1"
 

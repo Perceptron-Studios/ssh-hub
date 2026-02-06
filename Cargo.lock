@@ -803,12 +803,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "glob"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
-
-[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1204,21 +1198,6 @@ dependencies = [
 
 [[package]]
 name = "pageant"
-version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "032d6201d2fb765158455ae0d5a510c016bb6da7232e5040e39e9c8db12b0afc"
-dependencies = [
- "bytes",
- "delegate",
- "futures",
- "rand",
- "thiserror 1.0.69",
- "tokio",
- "windows",
-]
-
-[[package]]
-name = "pageant"
 version = "0.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2c6f0e349ea8dea1b50aa17c082777d30df133d89898c7568a615354772d3731"
@@ -1600,7 +1579,7 @@ dependencies = [
  "p256",
  "p384",
  "p521",
- "pageant 0.0.2",
+ "pageant",
  "pbkdf2",
  "pkcs1",
  "pkcs5",
@@ -1609,8 +1588,8 @@ dependencies = [
  "rand",
  "rand_core",
  "rsa",
- "russh-cryptovec 0.50.2",
- "russh-util 0.50.0",
+ "russh-cryptovec",
+ "russh-util",
  "sec1",
  "sha1",
  "sha2",
@@ -1627,17 +1606,6 @@ dependencies = [
 
 [[package]]
 name = "russh-cryptovec"
-version = "0.48.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4d8e7e854e1a87e4be00fa287c98cad23faa064d0464434beaa9f014ec3baa98"
-dependencies = [
- "libc",
- "ssh-encoding",
- "winapi",
-]
-
-[[package]]
-name = "russh-cryptovec"
 version = "0.50.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1fcb7c127135848b47715b5bcb13d8a27ccd86ce1de1c15eab5982df91fe279a"
@@ -1646,74 +1614,6 @@ dependencies = [
  "log",
  "ssh-encoding",
  "winapi",
-]
-
-[[package]]
-name = "russh-keys"
-version = "0.48.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fed9bf3da16ad2892a44b840e40483010295bfc8fda8134650c381654cb1ef36"
-dependencies = [
- "aes",
- "async-trait",
- "bcrypt-pbkdf",
- "block-padding",
- "byteorder",
- "bytes",
- "cbc",
- "ctr",
- "data-encoding",
- "der",
- "digest",
- "ecdsa",
- "ed25519-dalek",
- "elliptic-curve",
- "futures",
- "getrandom 0.2.17",
- "hmac",
- "home",
- "inout",
- "log",
- "md5",
- "num-integer",
- "p256",
- "p384",
- "p521",
- "pageant 0.0.1",
- "pbkdf2",
- "pkcs1",
- "pkcs5",
- "pkcs8",
- "rand",
- "rand_core",
- "rsa",
- "russh-cryptovec 0.48.0",
- "russh-util 0.48.0",
- "sec1",
- "serde",
- "sha1",
- "sha2",
- "signature",
- "spki",
- "ssh-encoding",
- "ssh-key",
- "thiserror 1.0.69",
- "tokio",
- "tokio-stream",
- "typenum",
- "zeroize",
-]
-
-[[package]]
-name = "russh-util"
-version = "0.48.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92c7dd577958c0cefbc8f8a2c05c48c88c42e2fdb760dbe9b96ae31d4de97a1f"
-dependencies = [
- "chrono",
- "tokio",
- "wasm-bindgen",
- "wasm-bindgen-futures",
 ]
 
 [[package]]
@@ -2026,48 +1926,20 @@ name = "ssh-hub"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "clap",
  "colored",
  "dirs",
- "glob",
  "md-5",
  "rmcp",
  "russh",
- "russh-keys",
  "schemars",
  "serde",
  "serde_json",
- "ssh-key",
  "tempfile",
- "thiserror 1.0.69",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "ssh-key"
-version = "0.6.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b86f5297f0f04d08cabaa0f6bff7cb6aec4d9c3b49d87990d63da9d9156a8c3"
-dependencies = [
- "bcrypt-pbkdf",
- "ed25519-dalek",
- "num-bigint-dig",
- "p256",
- "p384",
- "p521",
- "rand_core",
- "rsa",
- "sec1",
- "sha2",
- "signature",
- "ssh-cipher",
- "ssh-encoding",
- "subtle",
- "zeroize",
 ]
 
 [[package]]
