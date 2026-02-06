@@ -129,7 +129,8 @@ impl RemoteSessionServer {
     pub async fn run(self) -> Result<()> {
         let transport = (stdin(), stdout());
         tracing::info!("Starting MCP server on stdio");
-        self.serve(transport).await?;
+        let service = self.serve(transport).await?;
+        service.waiting().await?;
         Ok(())
     }
 }
