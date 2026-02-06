@@ -3,6 +3,7 @@ name: Auto-tag release
 on:
   push:
     branches: [main]
+    paths: [Cargo.toml]
 
 permissions:
   contents: write
