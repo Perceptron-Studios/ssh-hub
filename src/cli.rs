@@ -62,6 +62,13 @@ pub enum Command {
         #[arg(long)]
         codex: bool,
     },
+
+    /// Update ssh-hub to the latest release
+    Update {
+        /// Check for updates without installing
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 const DEFAULT_PORT: u16 = 22;

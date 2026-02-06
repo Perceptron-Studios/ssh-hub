@@ -73,6 +73,11 @@ async fn main() -> Result<()> {
         }) => {
             run_mcp_install(directory, claude, codex)?;
         }
+
+        // Self-update
+        Some(Command::Update { check }) => {
+            run_update(check)?;
+        }
     }
 
     Ok(())
@@ -362,5 +367,67 @@ fn install_codex_config(target: &Path) -> Result<()> {
         "ok".green(),
         path.display().to_string().dimmed(),
     );
+    Ok(())
+}
+
+fn run_update(check_only: bool) -> Result<()> {
+    let current = env!("CARGO_PKG_VERSION");
+
+    println!(
+        "{} Current version: {}",
+        ">".blue().bold(),
+        format!("v{}", current).bold(),
+    );
+
+    let updater = self_update::backends::github::Update::configure()
+        .repo_owner("Perceptron-Studios")
+        .repo_name("ssh-hub")
+        .bin_name("ssh-hub")
+        .current_version(current)
+        .show_download_progress(true)
+        .no_confirm(true)
+        .build()?;
+
+    let latest = match updater.get_latest_release() {
+        Ok(release) => release,
+        Err(_) => {
+            println!(
+                "  {} No releases found. You're on the latest build.",
+                "ok".green(),
+            );
+            return Ok(());
+        }
+    };
+    let latest_version = latest.version.trim_start_matches('v');
+
+    if latest_version == current {
+        println!(
+            "  {} Already on latest version",
+            "ok".green(),
+        );
+        return Ok(());
+    }
+
+    println!(
+        "  {} New version available: {}",
+        "!".yellow().bold(),
+        format!("v{}", latest_version).bold(),
+    );
+
+    if check_only {
+        println!(
+            "  Run {} to install",
+            "ssh-hub update".bold(),
+        );
+        return Ok(());
+    }
+
+    let status = updater.update()?;
+    println!(
+        "  {} Updated to {}",
+        "ok".green(),
+        format!("v{}", status.version()).bold(),
+    );
+
     Ok(())
 }

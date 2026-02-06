@@ -1,44 +1,88 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+REPO="Perceptron-Studios/ssh-hub"
+INSTALL_DIR="${SSH_HUB_INSTALL_DIR:-$HOME/.cargo/bin}"
+
 echo "=== ssh-hub installer ==="
 echo ""
 
-# ── Prerequisites ──────────────────────────────────────────────────────
+# ── Detect platform ───────────────────────────────────────────────────
 
-if ! command -v rustc &>/dev/null || ! command -v cargo &>/dev/null; then
-    echo "Error: Rust toolchain not found."
+OS=$(uname -s)
+ARCH=$(uname -m)
+
+case "${OS}-${ARCH}" in
+    Darwin-arm64)   TARGET="aarch64-apple-darwin" ;;
+    Darwin-x86_64)  TARGET="x86_64-apple-darwin" ;;
+    Linux-x86_64)   TARGET="x86_64-unknown-linux-gnu" ;;
+    Linux-aarch64)  TARGET="aarch64-unknown-linux-gnu" ;;
+    *)
+        echo "Error: Unsupported platform: ${OS}-${ARCH}"
+        echo ""
+        echo "Supported platforms:"
+        echo "  macOS: arm64 (Apple Silicon), x86_64 (Intel)"
+        echo "  Linux: x86_64, aarch64"
+        exit 1
+        ;;
+esac
+
+echo "Platform: ${OS} ${ARCH} (${TARGET})"
+
+# ── Fetch latest release ──────────────────────────────────────────────
+
+echo "Fetching latest release..."
+
+LATEST=$(curl -sL "https://api.github.com/repos/${REPO}/releases/latest" \
+    | grep '"tag_name"' | head -1 | cut -d'"' -f4)
+
+if [ -z "${LATEST}" ]; then
+    echo "Error: Could not determine latest release."
     echo ""
-    echo "Install it with:"
-    echo "  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
-    echo ""
-    echo "Then restart your shell and re-run this script."
+    echo "You can install from source instead:"
+    echo "  cargo install --path ."
     exit 1
 fi
 
-echo "Rust toolchain found: $(rustc --version)"
+ASSET="ssh-hub-${LATEST}-${TARGET}.tar.gz"
+URL="https://github.com/${REPO}/releases/download/${LATEST}/${ASSET}"
 
-# ── Build & install ────────────────────────────────────────────────────
+echo "Latest version: ${LATEST}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# ── Download and install ──────────────────────────────────────────────
 
 echo ""
-echo "Building and installing ssh-hub..."
-cargo install --path "$SCRIPT_DIR"
+echo "Downloading ${ASSET}..."
+
+mkdir -p "${INSTALL_DIR}"
+
+if ! curl -fsSL "${URL}" | tar xz -C "${INSTALL_DIR}"; then
+    echo ""
+    echo "Error: Download failed. The release may not have a binary for ${TARGET}."
+    echo ""
+    echo "You can install from source instead:"
+    echo "  cargo install --path ."
+    exit 1
+fi
+
+chmod +x "${INSTALL_DIR}/ssh-hub"
+
+echo ""
+echo "Installed: ${INSTALL_DIR}/ssh-hub (${LATEST})"
+
+# ── Verify PATH ───────────────────────────────────────────────────────
 
 if ! command -v ssh-hub &>/dev/null; then
     echo ""
-    echo "Error: ssh-hub binary not found after install."
+    echo "Note: ${INSTALL_DIR} is not in your PATH."
     echo ""
     echo "Add this to your shell profile (~/.zshrc or ~/.bashrc):"
-    echo "  export PATH=\"\$HOME/.cargo/bin:\$PATH\""
+    echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
     echo ""
-    echo "Then restart your shell and re-run this script."
-    exit 1
+    echo "Then restart your shell."
+else
+    echo ""
+    echo "Next steps:"
+    echo "  1. Add a remote server:    ssh-hub add myserver user@host:/path"
+    echo "  2. Register MCP in project: ssh-hub mcp-install /path/to/project"
 fi
-
-echo "Installed: $(ssh-hub --version)"
-echo ""
-echo "Next steps:"
-echo "  1. Add a remote server:  ssh-hub add myserver user@host:/path"
-echo "  2. Add the MCP to a project:  ssh-hub mcp-install /path/to/project"

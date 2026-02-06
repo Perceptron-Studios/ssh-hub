@@ -11,7 +11,7 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 
 ## Architecture
 
-- `src/main.rs` — CLI handlers (add, remove, list, mcp-install). Colored output via `colored` crate.
+- `src/main.rs` — CLI handlers (add, remove, list, mcp-install, update). Colored output via `colored` crate.
 - `src/cli.rs` — Clap definitions, connection string parsing, `ConnectionParams` builders
 - `src/server.rs` — MCP server (`RemoteSessionServer`) using `rmcp` macros (`#[tool_router]`, `#[tool_handler]`)
 - `src/connection/` — `auth.rs` (agent/key fallback chain, RSA hash negotiation), `session.rs` (SSH session), `pool.rs` (connection pool)
@@ -26,6 +26,8 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 - RSA keys negotiate sha2-256/512 via `best_supported_rsa_hash()` (servers reject SHA-1)
 - Server config is saved only after a successful connection test
 - CLI output uses `colored` crate — `ok`/`warn`/`failed` status prefixes
+- Self-update via `self_update` crate — checks GitHub Releases, downloads platform-specific binary
+- Releases: tag `v*` triggers `.github/workflows/release.yml` (builds 4 targets, creates GitHub Release)
 
 ## References
 

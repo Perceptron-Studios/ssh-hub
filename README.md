@@ -4,19 +4,25 @@ MCP server that gives AI coding agents full access to remote machines over SSH. 
 
 ## Prerequisites
 
-- **Rust toolchain** (1.70+) — install via [rustup](https://rustup.rs/)
 - **SSH agent** with loaded keys (`ssh-add`) or SSH key files (`~/.ssh/id_ed25519`, etc.)
 
 ## Install
 
 ```bash
-# Clone and install
-git clone https://github.com/Perceptron-Studios/ssh-hub.git
-cd ssh-hub
-./install.sh
+curl -fsSL https://raw.githubusercontent.com/Perceptron-Studios/ssh-hub/main/install.sh | bash
+```
 
-# Or install directly
-cargo install --path .
+Or from source (requires [Rust toolchain](https://rustup.rs/)):
+
+```bash
+git clone https://github.com/Perceptron-Studios/ssh-hub.git
+cd ssh-hub && cargo install --path .
+```
+
+### Update
+
+```bash
+ssh-hub update
 ```
 
 ## Quick start
@@ -56,6 +62,7 @@ ssh-hub add myserver user@host -i ~/.ssh/my_key
 | `ssh-hub remove <name>` | Remove a server from config |
 | `ssh-hub list` | List configured servers |
 | `ssh-hub mcp-install [directory]` | Register ssh-hub as MCP server in a project |
+| `ssh-hub update` | Update to the latest release |
 
 **Options:** `-v` verbose logging, `-i <path>` identity file, `-p <port>` port override.
 
