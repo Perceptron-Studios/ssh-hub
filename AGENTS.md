@@ -28,6 +28,13 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 - CLI output uses `colored` crate — `ok`/`warn`/`failed` status prefixes
 - Self-update via `ssh-hub update` — checks GitHub tags, runs `cargo install --git` if newer version exists
 
+## Releasing
+
+1. Bump `version` in `Cargo.toml`
+2. Push to `main`
+3. GitHub Action (`.github/workflows/tag.yml`) auto-creates a `vX.Y.Z` tag if it doesn't exist
+4. Users pick up the new version via `ssh-hub update`
+
 ## References
 
 - [docs/testing.md](docs/testing.md) — test structure, what's covered, how to add tests
