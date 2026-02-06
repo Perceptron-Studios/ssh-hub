@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use colored::Colorize;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -370,6 +370,9 @@ fn install_codex_config(target: &Path) -> Result<()> {
     Ok(())
 }
 
+const REPO_URL: &str = "https://github.com/Perceptron-Studios/ssh-hub.git";
+const REPO_API: &str = "https://api.github.com/repos/Perceptron-Studios/ssh-hub/tags?per_page=1";
+
 fn run_update(check_only: bool) -> Result<()> {
     let current = env!("CARGO_PKG_VERSION");
 
@@ -379,32 +382,30 @@ fn run_update(check_only: bool) -> Result<()> {
         format!("v{}", current).bold(),
     );
 
-    let updater = self_update::backends::github::Update::configure()
-        .repo_owner("Perceptron-Studios")
-        .repo_name("ssh-hub")
-        .bin_name("ssh-hub")
-        .current_version(current)
-        .show_download_progress(true)
-        .no_confirm(true)
-        .build()?;
+    // Fetch latest tag from GitHub API via curl
+    let output = std::process::Command::new("curl")
+        .args(["-sL", REPO_API])
+        .output()
+        .context("Failed to run curl — is it installed?")?;
 
-    let latest = match updater.get_latest_release() {
-        Ok(release) => release,
-        Err(_) => {
-            println!(
-                "  {} No releases found. You're on the latest build.",
-                "ok".green(),
-            );
-            return Ok(());
-        }
-    };
-    let latest_version = latest.version.trim_start_matches('v');
+    if !output.status.success() {
+        return Err(anyhow::anyhow!("Failed to fetch tags from GitHub"));
+    }
+
+    let body = String::from_utf8_lossy(&output.stdout);
+    let tags: serde_json::Value = serde_json::from_str(&body)
+        .context("Failed to parse GitHub API response")?;
+
+    let latest_tag = tags
+        .as_array()
+        .and_then(|arr: &Vec<serde_json::Value>| arr.first())
+        .and_then(|tag| tag["name"].as_str())
+        .ok_or_else(|| anyhow::anyhow!("No tags found in repository"))?;
+
+    let latest_version = latest_tag.trim_start_matches('v');
 
     if latest_version == current {
-        println!(
-            "  {} Already on latest version",
-            "ok".green(),
-        );
+        println!("  {} Already on latest version", "ok".green());
         return Ok(());
     }
 
@@ -415,19 +416,29 @@ fn run_update(check_only: bool) -> Result<()> {
     );
 
     if check_only {
-        println!(
-            "  Run {} to install",
-            "ssh-hub update".bold(),
-        );
+        println!("  Run {} to install", "ssh-hub update".bold());
         return Ok(());
     }
 
-    let status = updater.update()?;
-    println!(
-        "  {} Updated to {}",
-        "ok".green(),
-        format!("v{}", status.version()).bold(),
-    );
+    // Check for cargo
+    if std::process::Command::new("cargo").arg("--version").output().is_err() {
+        return Err(anyhow::anyhow!(
+            "Rust toolchain not found. Install it via https://rustup.rs/ then retry."
+        ));
+    }
+
+    println!("{} Installing {}...", ">".blue().bold(), latest_tag.bold());
+
+    let status = std::process::Command::new("cargo")
+        .args(["install", "--git", REPO_URL, "--tag", latest_tag])
+        .status()
+        .context("Failed to run cargo install")?;
+
+    if status.success() {
+        println!("  {} Updated to {}", "ok".green(), format!("v{}", latest_version).bold());
+    } else {
+        return Err(anyhow::anyhow!("cargo install failed with exit code {}", status.code().unwrap_or(-1)));
+    }
 
     Ok(())
 }

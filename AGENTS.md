@@ -26,8 +26,7 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 - RSA keys negotiate sha2-256/512 via `best_supported_rsa_hash()` (servers reject SHA-1)
 - Server config is saved only after a successful connection test
 - CLI output uses `colored` crate — `ok`/`warn`/`failed` status prefixes
-- Self-update via `self_update` crate — checks GitHub Releases, downloads platform-specific binary
-- Releases: tag `v*` triggers `.github/workflows/release.yml` (builds 4 targets, creates GitHub Release)
+- Self-update via `ssh-hub update` — checks GitHub tags, runs `cargo install --git` if newer version exists
 
 ## References
 
