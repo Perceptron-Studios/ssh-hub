@@ -1,0 +1,24 @@
+pub mod connect;
+pub mod disconnect;
+pub mod list_servers;
+pub mod remote_bash;
+pub mod remote_edit;
+pub mod remote_glob;
+pub mod remote_read;
+pub mod remote_write;
+pub mod sync_pull;
+pub mod sync_push;
+pub mod sync_status;
+
+// Re-export input types for convenient use in server.rs
+pub use connect::ConnectInput;
+pub use disconnect::DisconnectInput;
+pub use list_servers::ListServersInput;
+pub use remote_bash::RemoteBashInput;
+pub use remote_edit::RemoteEditInput;
+pub use remote_glob::RemoteGlobInput;
+pub use remote_read::RemoteReadInput;
+pub use remote_write::RemoteWriteInput;
+pub use sync_pull::SyncPullInput;
+pub use sync_push::SyncPushInput;
+pub use sync_status::SyncStatusInput;

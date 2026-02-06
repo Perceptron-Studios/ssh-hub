@@ -1,0 +1,48 @@
+[package]
+name = "ssh-hub"
+version = "0.1.0"
+edition = "2021"
+description = "MCP server for remote SSH sessions"
+license = "MIT"
+repository = "https://github.com/perceptron-studios/ssh-hub"
+
+[dependencies]
+# MCP SDK
+rmcp = { version = "0.13", features = ["server", "transport-io"] }
+
+# SSH
+russh = "0.50"
+russh-keys = "0.48"
+ssh-key = "0.6"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization & schemas
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Config
+toml = "0.8"
+
+# Utils
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+glob = "0.3"
+md-5 = "0.10"
+async-trait = "0.1"
+dirs = "5"
+
+[lib]
+name = "ssh_hub"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ssh-hub"
+path = "src/main.rs"
