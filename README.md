@@ -64,9 +64,7 @@ ssh-hub add myserver user@host -i ~/.ssh/my_key
 
 ## Authentication
 
-All authentication is SSH-key based. No passwords are stored or transmitted.
-
-The default method is **Auto**, which tries in order:
+All authentication is SSH-key based. No passwords are stored or transmitted. Keys are tried in order:
 
 1. **SSH agent** — keys loaded via `ssh-add`, signing delegated to `ssh-agent`
 2. **Identity file** — key specified with `-i` during `add`
@@ -111,13 +109,11 @@ user = "deploy"
 port = 2222
 remote_path = "/var/www/app"
 identity = "~/.ssh/id_staging"
-auth = "auto"
 
 [servers.prod]
 host = "prod.example.com"
 user = "deploy"
 remote_path = "~"
-auth = "auto"
 ```
 
 ## License
