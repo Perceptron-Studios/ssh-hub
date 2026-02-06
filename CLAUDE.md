@@ -1,55 +1,32 @@
 # ssh-hub
 
-MCP server for remote SSH sessions. Rust binary (`ssh-hub`) that exposes remote file ops, shell execution, and directory sync over the MCP protocol.
+MCP server for remote SSH sessions. Rust binary that exposes remote file ops, shell execution, and directory sync over the MCP protocol.
 
-## Domain concepts
+## Core concepts
 
-- **ServerRegistry** — TOML config mapping server aliases to connection details
-- **ServerEntry** — host, user, port, remote_path, identity file, auth method
-- **ConnectionPool** — Thread-safe map of active SSH connections (`Arc<RwLock<HashMap>>`)
-- **SshConnection** — SSH session wrapping a russh `Handle`: `exec()`, `read_file()`, `write_file()`, `glob()`
-- **AuthMethod** — `Auto | Agent | Key` (no password auth)
-
-## Authentication
-
-- **Auto** (default): SSH agent -> explicit identity -> default keys (`~/.ssh/id_{ed25519,rsa,ecdsa}`)
-- RSA keys negotiate sha2-256/512 via `best_supported_rsa_hash()` (legacy SHA-1 rejected by modern servers)
-- No password auth — keys only, agent preferred
+- **ServerRegistry** — TOML config mapping server aliases to `ServerEntry` (host, user, port, remote_path, identity, auth)
+- **ConnectionPool** — `Arc<RwLock<HashMap>>` of active `SshConnection`s
+- **SshConnection** — wraps a russh `Handle`, provides `exec()`, `read_file()`, `write_file()`, `glob()`
+- **AuthMethod** — `Auto | Agent | Key` — no password auth, agent preferred
 
 ## Architecture
 
-```
-src/
-├── main.rs             # CLI entrypoint (add, remove, list, mcp-install, or start MCP server)
-├── cli.rs              # Clap definitions, connection string parsing, param builders
-├── server.rs           # MCP server (RemoteSessionServer) — routes tools via rmcp macros
-├── server_registry.rs  # ServerRegistry, ServerEntry, AuthMethod (serde + TOML)
-├── lib.rs              # Public module exports
-├── connection/
-│   ├── auth.rs         # Authentication logic (agent, key, auto fallback chain)
-│   ├── session.rs      # SshConnection, ConnectionParams, SshHandler, ExecResult
-│   └── pool.rs         # ConnectionPool (RwLock<HashMap>)
-├── tools/              # Each tool: mod.rs + schema.rs + handler.rs
-│   ├── connect, disconnect, list_servers
-│   ├── remote_bash, remote_read, remote_write, remote_edit, remote_glob
-│   └── sync_status, sync_push, sync_pull
-└── utils/
-    ├── checksum.rs     # MD5 hashing for sync
-    └── path.rs         # Path normalization
-```
+- `src/main.rs` — CLI handlers (add, remove, list, mcp-install). Colored output via `colored` crate.
+- `src/cli.rs` — Clap definitions, connection string parsing, `ConnectionParams` builders
+- `src/server.rs` — MCP server (`RemoteSessionServer`) using `rmcp` macros (`#[tool_router]`, `#[tool_handler]`)
+- `src/connection/` — `auth.rs` (agent/key fallback chain, RSA hash negotiation), `session.rs` (SSH session), `pool.rs` (connection pool)
+- `src/tools/` — one module per MCP tool, each with `mod.rs` + `schema.rs` + `handler.rs`
+- `src/utils/` — `checksum.rs` (MD5), `path.rs` (normalization)
 
-## Build & test
+## Key patterns
 
-```bash
-cargo build
-cargo test              # 25 tests (cli parsing, mcp install, server registry, utils)
-```
+- Connection strings: `user@host`, `user@host:/path`, `user@host:port`, `user@host:port:/path` — path defaults to `~`
+- All remote tools go through `with_connection()` which checks the pool
+- Commands execute as `cd {remote_path} && {command}` — `~` is shell-expanded
+- RSA keys negotiate sha2-256/512 via `best_supported_rsa_hash()` (servers reject SHA-1)
+- Server config is saved only after a successful connection test
+- CLI output uses `colored` crate — `ok`/`warn`/`failed` status prefixes
 
-## Business rules
+## References
 
-- All remote tools require an active connection (checked via `with_connection()`)
-- Connection string: `user@host`, `user@host:/path`, `user@host:port`, `user@host:port:/path`
-- Remote path defaults to `~` when omitted
-- Commands execute in the server's `remote_path` as cwd
-- Server config saved only after successful connection test
-- Sync is checksum-based (MD5), git-aware when available
+- [docs/testing.md](docs/testing.md) — test structure, what's covered, how to add tests
