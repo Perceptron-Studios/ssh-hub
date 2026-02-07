@@ -1,4 +1,47 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use anyhow::{anyhow, Result};
+
+/// Escape a string for safe interpolation into a POSIX shell command.
+/// Wraps in single quotes with internal `'` escaped as `'\''`.
+pub fn shell_escape(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Shell-escape a remote path, expanding `~` to `$HOME` so tilde expansion
+/// isn't broken by single-quoting. Use this for any path that might be `~` or
+/// `~/...` and will appear inside a shell command string.
+pub fn shell_escape_remote_path(path: &str) -> String {
+    if path == "~" {
+        "$HOME".to_string()
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        format!("$HOME/{}", shell_escape(rest))
+    } else {
+        shell_escape(path)
+    }
+}
+
+/// Validate that a relative path stays within the base directory after resolution.
+/// Canonicalizes both paths to catch `..` traversal and symlink escapes.
+/// Returns the canonical path on success.
+pub fn validate_path_within(base_dir: &Path, relative: &str) -> Result<PathBuf> {
+    let full_path = base_dir.join(relative);
+    let canon_base = base_dir
+        .canonicalize()
+        .map_err(|e| anyhow!("Cannot canonicalize base dir: {}", e))?;
+    let canon_full = full_path
+        .canonicalize()
+        .map_err(|e| anyhow!("Cannot resolve '{}': {}", relative, e))?;
+
+    if !canon_full.starts_with(&canon_base) {
+        return Err(anyhow!(
+            "Path traversal rejected: '{}' resolves outside base directory",
+            relative
+        ));
+    }
+
+    Ok(canon_full)
+}
 
 /// Normalize a path relative to the base remote path
 pub fn normalize_remote_path(path: &str, base_path: &str) -> String {

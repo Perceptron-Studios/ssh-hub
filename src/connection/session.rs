@@ -8,6 +8,8 @@ use russh::ChannelMsg;
 use tokio::sync::Mutex;
 
 use crate::server_registry::AuthMethod;
+use crate::utils::path::{shell_escape, shell_escape_remote_path};
+
 use super::auth;
 
 /// Stdin is written to the SSH channel in chunks of this size.
@@ -36,19 +38,63 @@ pub struct ConnectionParams {
     pub server_name: Option<String>,
 }
 
-/// SSH client handler for russh.
-pub(super) struct SshHandler;
+/// SSH client handler for russh — carries host info for key verification.
+pub(super) struct SshHandler {
+    host: String,
+    port: u16,
+}
+
+impl SshHandler {
+    pub fn new(host: String, port: u16) -> Self {
+        Self { host, port }
+    }
+}
 
 impl client::Handler for SshHandler {
     type Error = anyhow::Error;
 
-    // TODO: Implement proper host key verification
     async fn check_server_key(
         &mut self,
-        _server_public_key: &PublicKey,
+        server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        tracing::debug!("Accepting server key without verification");
-        Ok(true)
+        use russh::keys::known_hosts;
+
+        match known_hosts::check_known_hosts(&self.host, self.port, server_public_key) {
+            Ok(true) => {
+                tracing::debug!("Host key verified for {}:{}", self.host, self.port);
+                Ok(true)
+            }
+            Ok(false) => {
+                // TOFU: first time seeing this host — learn the key
+                tracing::info!(
+                    "New host key for {}:{}, adding to known_hosts",
+                    self.host, self.port
+                );
+                if let Err(e) = known_hosts::learn_known_hosts(
+                    &self.host, self.port, server_public_key,
+                ) {
+                    tracing::warn!("Failed to save host key to known_hosts: {}", e);
+                }
+                Ok(true)
+            }
+            Err(russh::keys::Error::KeyChanged { line }) => {
+                Err(anyhow!(
+                    "HOST KEY VERIFICATION FAILED for {}:{}. \
+                     The server's key has changed since it was last recorded \
+                     (known_hosts line {}). This could indicate a man-in-the-middle attack. \
+                     If the server was legitimately reinstalled, remove line {} from \
+                     ~/.ssh/known_hosts and reconnect.",
+                    self.host, self.port, line, line
+                ))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Could not verify host key for {}:{}: {}. Accepting.",
+                    self.host, self.port, e
+                );
+                Ok(true)
+            }
+        }
     }
 }
 
@@ -77,7 +123,7 @@ impl SshConnection {
         );
 
         let config = Arc::new(client::Config::default());
-        let handler = SshHandler;
+        let handler = SshHandler::new(params.host.clone(), params.port);
 
         let mut session =
             client::connect(config, (params.host.as_str(), params.port), handler)
@@ -121,7 +167,11 @@ impl SshConnection {
             .await
             .context("Failed to open channel")?;
 
-        let full_command = format!("cd {} && {}", self.params.remote_path, command);
+        let full_command = format!(
+            "cd {} && {}",
+            shell_escape_remote_path(&self.params.remote_path),
+            command,
+        );
 
         channel
             .exec(true, full_command)
@@ -158,7 +208,8 @@ impl SshConnection {
                     Some(ChannelMsg::ExitStatus { exit_status }) => {
                         exit_code = Some(exit_status as i32);
                     }
-                    Some(ChannelMsg::Eof) | None => break,
+                    Some(ChannelMsg::Eof) => {}
+                    None => break,
                     _ => {}
                 }
             }
@@ -219,7 +270,8 @@ impl SshConnection {
     /// # Errors
     /// Returns an error if the remote `cat` command fails or the file does not exist.
     pub async fn read_file(&self, path: &str) -> Result<String> {
-        let result = self.exec(&format!("cat '{}'", path), Some(FILE_IO_TIMEOUT_MS)).await?;
+        let command = format!("cat {}", shell_escape_remote_path(path));
+        let result = self.exec(&command, Some(FILE_IO_TIMEOUT_MS)).await?;
         if result.exit_code != 0 {
             return Err(anyhow!("Failed to read file: {}", result.stderr));
         }
@@ -228,14 +280,16 @@ impl SshConnection {
 
     /// Write content to a file on the remote machine.
     ///
+    /// Uses stdin piping instead of heredoc to avoid delimiter collisions.
+    ///
     /// # Errors
     /// Returns an error if the remote write command fails.
     pub async fn write_file(&self, path: &str, content: &str) -> Result<()> {
-        let command = format!(
-            "cat > '{}' << 'CLAUDE_REMOTE_EOF'\n{}\nCLAUDE_REMOTE_EOF",
-            path, content
-        );
-        let result = self.exec(&command, Some(FILE_IO_TIMEOUT_MS)).await?;
+        let escaped_path = shell_escape_remote_path(path);
+        let command = format!("cat > {}", escaped_path);
+        let result = self
+            .exec_raw(&command, Some(content.as_bytes()), Some(FILE_IO_TIMEOUT_MS))
+            .await?;
         if result.exit_code != 0 {
             return Err(anyhow!("Failed to write file: {}", result.stderr));
         }
@@ -251,8 +305,8 @@ impl SshConnection {
         let result = self
             .exec(
                 &format!(
-                    "cd '{}' && find . -path '{}' -type f 2>/dev/null | head -{}",
-                    path, pattern, GLOB_MAX_RESULTS
+                    "cd {} && find . -path {} -type f 2>/dev/null | head -{}",
+                    shell_escape_remote_path(path), shell_escape(pattern), GLOB_MAX_RESULTS
                 ),
                 Some(GLOB_TIMEOUT_MS),
             )

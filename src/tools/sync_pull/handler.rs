@@ -6,7 +6,7 @@ use flate2::read::GzDecoder;
 
 use crate::connection::SshConnection;
 use crate::tools::sync_types::SyncOutput;
-use crate::utils::path::normalize_remote_path;
+use crate::utils::path::{normalize_remote_path, shell_escape, shell_escape_remote_path};
 use super::schema::SyncPullInput;
 
 /// Timeout for the remote `test -d` probe (10 seconds).
@@ -20,13 +20,11 @@ pub async fn handle(conn: Arc<SshConnection>, input: SyncPullInput) -> String {
     let remote_path = normalize_remote_path(&input.remote_path, &base_path);
 
     // Determine if remote path is file or directory
-    let is_dir = match conn
-        .exec(
-            &format!("test -d '{}' && echo dir || echo file", remote_path),
-            Some(PROBE_TIMEOUT_MS),
-        )
-        .await
-    {
+    let probe_cmd = format!(
+        "test -d {} && echo dir || echo file",
+        shell_escape_remote_path(&remote_path),
+    );
+    let is_dir = match conn.exec(&probe_cmd, Some(PROBE_TIMEOUT_MS)).await {
         Ok(result) => result.stdout.trim() == "dir",
         Err(_) => false,
     };
@@ -84,12 +82,12 @@ async fn pull_directory(
     let files_arg = match files_filter {
         Some(files) => files
             .iter()
-            .map(|f| format!("'{}'", f))
+            .map(|f| shell_escape(f))
             .collect::<Vec<_>>()
             .join(" "),
         None => ".".to_string(),
     };
-    let command = format!("tar czf - -C '{}' {}", remote_path, files_arg);
+    let command = format!("tar czf - -C {} {}", shell_escape_remote_path(remote_path), files_arg);
 
     // Get raw tar bytes from remote
     let raw_result = match conn.exec_raw(&command, None, Some(SYNC_TIMEOUT_MS)).await {
@@ -136,6 +134,8 @@ async fn pull_directory(
         }
     };
 
+    // Skip entries that fail to read or unpack -- only successfully
+    // extracted files appear in the output's `transferred` list.
     let pulled: Vec<String> = entries
         .filter_map(|entry| entry.ok())
         .filter_map(|mut entry| {

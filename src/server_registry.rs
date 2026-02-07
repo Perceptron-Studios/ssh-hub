@@ -1,7 +1,8 @@
-use anyhow::{anyhow, Result};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+use anyhow::{anyhow, Result};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ServerRegistry {
@@ -53,9 +54,35 @@ impl ServerRegistry {
         let path = Self::config_path()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let perms = std::fs::Permissions::from_mode(0o700);
+                std::fs::set_permissions(parent, perms)?;
+            }
         }
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(&path, content)?;
+
+        #[cfg(unix)]
+        {
+            use std::fs::OpenOptions;
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&path)?;
+            file.write_all(content.as_bytes())?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            std::fs::write(&path, content)?;
+        }
+
         Ok(())
     }
 

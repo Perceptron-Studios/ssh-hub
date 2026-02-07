@@ -6,7 +6,7 @@ use flate2::Compression;
 
 use crate::connection::SshConnection;
 use crate::tools::sync_types::SyncOutput;
-use crate::utils::path::normalize_remote_path;
+use crate::utils::path::{normalize_remote_path, shell_escape_remote_path, validate_path_within};
 use super::schema::SyncPushInput;
 
 /// Timeout for tar-based directory sync operations (2 minutes).
@@ -19,7 +19,7 @@ fn build_tar_gz(base_dir: &Path, files: &[String]) -> anyhow::Result<Vec<u8>> {
     let mut tar = tar::Builder::new(enc);
 
     for file in files {
-        let full_path = base_dir.join(file);
+        let full_path = validate_path_within(base_dir, file)?;
         tar.append_path_with_name(&full_path, file)
             .map_err(|e| anyhow::anyhow!("Failed to add '{}' to archive: {}", file, e))?;
     }
@@ -96,7 +96,7 @@ async fn push_directory(
 ) -> String {
     let dir_str = local_dir.display().to_string();
 
-    // Collect file list
+    // Collect file list (path traversal is validated inside build_tar_gz)
     let files = match files_filter {
         Some(f) => f.to_vec(),
         None => match walk_dir(local_dir) {
@@ -122,8 +122,12 @@ async fn push_directory(
     };
 
     // Stream to remote via stdin
-    let command = format!("mkdir -p '{}' && tar xzf - -C '{}'", remote_dest, remote_dest);
-    match conn.exec_raw(&command, Some(&tar_bytes), Some(SYNC_TIMEOUT_MS)).await {
+    let escaped = shell_escape_remote_path(remote_dest);
+    let command = format!("mkdir -p {} && tar xzf - -C {}", escaped, escaped);
+    match conn
+        .exec_raw(&command, Some(&tar_bytes), Some(SYNC_TIMEOUT_MS))
+        .await
+    {
         Ok(result) if result.exit_code == 0 => SyncOutput::success(files).to_json(),
         Ok(result) => SyncOutput::failure(
             &dir_str,
