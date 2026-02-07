@@ -47,4 +47,5 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 ## References
 
 - [docs/testing.md](docs/testing.md) — test structure, integration testing process
+- [changelog/](changelog/) — per-version changelog with motivations and design decisions ([format guide](docs/changelog.md))
 - [AGENTS.md](AGENTS.md) — instructions for AI agents working on this repo
