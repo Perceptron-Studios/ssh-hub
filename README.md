@@ -75,17 +75,13 @@ RSA keys are automatically negotiated with SHA-256/SHA-512 signatures (modern se
 
 ## MCP tools
 
-Once connected, the following tools are available to any MCP client:
+All tools auto-connect to configured servers on first use — no manual connection step needed. Each tool takes a `server` parameter referencing a configured server name.
 
-### Connection management
+### Discovery
 
-- **`connect`** — Connect to a configured server (or ad-hoc via connection string)
-- **`disconnect`** — Disconnect from a server
-- **`list_servers`** — Show configured and connected servers
+- **`list_servers`** — Show configured servers with live reachability probes (TCP ping with latency)
 
 ### Remote operations
-
-All remote tools take a `server` parameter to target a specific connection.
 
 - **`remote_bash`** — Execute shell commands (with optional timeout and background mode)
 - **`remote_read`** — Read file contents (with offset/limit for large files)
