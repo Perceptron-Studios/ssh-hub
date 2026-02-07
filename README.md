@@ -94,9 +94,8 @@ All remote tools take a `server` parameter to target a specific connection.
 
 ### Sync
 
-- **`sync_status`** — Compare local and remote directories (git-aware when available)
-- **`sync_push`** — Push local files to remote
-- **`sync_pull`** — Pull remote files to local
+- **`sync_push`** — Push local files or directories to remote (tar streaming for directories)
+- **`sync_pull`** — Pull remote files or directories to local (tar streaming for directories)
 
 ## Configuration
 

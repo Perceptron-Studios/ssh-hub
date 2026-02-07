@@ -6,7 +6,7 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 
 - **ServerRegistry** — TOML config mapping server aliases to `ServerEntry` (host, user, port, remote_path, identity, auth)
 - **ConnectionPool** — `Arc<RwLock<HashMap>>` of active `SshConnection`s
-- **SshConnection** — wraps a russh `Handle`, provides `exec()`, `read_file()`, `write_file()`, `glob()`
+- **SshConnection** — wraps a russh `Handle`, provides `exec()`, `exec_raw()`, `read_file()`, `write_file()`, `glob()`
 - **AuthMethod** — `Auto | Agent | Key` — no password auth, agent preferred
 
 ## Architecture
@@ -15,8 +15,8 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 - `src/cli.rs` — Clap definitions, connection string parsing, `ConnectionParams` builders
 - `src/server.rs` — MCP server (`RemoteSessionServer`) using `rmcp` macros (`#[tool_router]`, `#[tool_handler]`)
 - `src/connection/` — `auth.rs` (agent/key fallback chain, RSA hash negotiation), `session.rs` (SSH session), `pool.rs` (connection pool)
-- `src/tools/` — one module per MCP tool, each with `mod.rs` + `schema.rs` + `handler.rs`
-- `src/utils/` — `checksum.rs` (MD5), `path.rs` (normalization)
+- `src/tools/` — one module per MCP tool, each with `mod.rs` + `schema.rs` + `handler.rs`. Shared sync types in `sync_types.rs`
+- `src/utils/` — `path.rs` (normalization, line number formatting)
 
 ## Key patterns
 
@@ -25,6 +25,7 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 - Commands execute as `cd {remote_path} && {command}` — `~` is shell-expanded
 - RSA keys negotiate sha2-256/512 via `best_supported_rsa_hash()` (servers reject SHA-1)
 - Server config is saved only after a successful connection test
+- `sync_push`/`sync_pull` use tar.gz streaming for directory transfers — single SSH round-trip via `exec_raw()`
 - CLI output uses `colored` crate — `ok`/`warn`/`failed` status prefixes
 - Self-update via `ssh-hub update` — checks GitHub tags, runs `cargo install --git` if newer version exists
 
