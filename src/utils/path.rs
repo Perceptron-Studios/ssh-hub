@@ -45,8 +45,8 @@ pub fn validate_path_within(base_dir: &Path, relative: &str) -> Result<PathBuf> 
 
 /// Normalize a path relative to the base remote path
 pub fn normalize_remote_path(path: &str, base_path: &str) -> String {
-    if path.starts_with('/') {
-        // Absolute path - use as-is
+    if path.starts_with('/') || path.starts_with('~') {
+        // Absolute or home-relative path - use as-is
         path.to_string()
     } else {
         // Relative path - join with base

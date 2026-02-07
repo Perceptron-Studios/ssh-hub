@@ -26,6 +26,19 @@ fn test_format_with_line_numbers() {
     assert!(formatted.contains("2\u{2192}line2"));
 }
 
+#[test]
+fn test_normalize_tilde_path() {
+    assert_eq!(
+        normalize_remote_path("~/.bashrc", "/home/user"),
+        "~/.bashrc"
+    );
+}
+
+#[test]
+fn test_normalize_tilde_only() {
+    assert_eq!(normalize_remote_path("~", "/home/user"), "~");
+}
+
 // ── shell_escape tests ──────────────────────────────────────────────
 
 #[test]
