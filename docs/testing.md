@@ -28,7 +28,7 @@ Unit tests cover parsing and config logic, but the MCP tools operate over live S
 
 2. **Restart the MCP server** in your MCP client (e.g., restart Claude Code's ssh-hub server so it picks up the new binary).
 
-3. **Connect to a real server** via the `connect` tool and exercise the affected tools against it. Test both the happy path and edge cases relevant to your change (e.g., binary files for sync changes, large output for bash handler changes, offset/limit for read changes).
+3. **Exercise the affected tools** against a configured server (auto-connects on first use). Test both the happy path and edge cases relevant to your change (e.g., binary files for sync changes, large output for bash handler changes, offset/limit for read changes).
 
 This is the primary development loop for this repo — `cargo test` validates offline logic, MCP integration testing validates everything that touches SSH.
 
