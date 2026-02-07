@@ -10,8 +10,9 @@ use rmcp::{tool, tool_handler, tool_router, ServerHandler, ServiceExt};
 use tokio::io::{stdin, stdout};
 use tokio::sync::RwLock;
 
+use crate::cli::params_from_config;
 use crate::server_registry::ServerRegistry;
-use crate::connection::{ConnectionPool, SshConnection};
+use crate::connection::{ConnectionParams, ConnectionPool, SshConnection};
 use crate::tools;
 
 /// MCP server for remote SSH sessions — manages multiple simultaneous connections.
@@ -34,19 +35,9 @@ impl RemoteSessionServer {
 
     // ── Management Tools ──────────────────────────────────────────────
 
-    #[tool(description = "List pre-configured and currently connected servers. Use this to discover available servers before connecting.")]
+    #[tool(description = "List pre-configured and currently connected servers. Use this to discover available servers before connecting. Includes reachability probe (TCP to SSH port) by default.")]
     async fn list_servers(&self, Parameters(input): Parameters<tools::ListServersInput>) -> String {
         tools::list_servers::handler::handle(&self.pool, &self.config, input).await
-    }
-
-    #[tool(description = "Connect to a remote server via SSH. Required before using any remote_* or sync_* tool. Use 'name' alone for pre-configured servers, or provide a 'connection' string for ad-hoc connections (e.g., user@host:/path).")]
-    async fn connect(&self, Parameters(input): Parameters<tools::ConnectInput>) -> String {
-        tools::connect::handler::handle(&self.pool, &self.config, input).await
-    }
-
-    #[tool(description = "Disconnect from a connected remote server. Closes the SSH session.")]
-    async fn disconnect(&self, Parameters(input): Parameters<tools::DisconnectInput>) -> String {
-        tools::disconnect::handler::handle(&self.pool, input).await
     }
 
     // ── Remote Tools ──────────────────────────────────────────────────
@@ -97,26 +88,64 @@ impl RemoteSessionServer {
 
     // ── Internals ─────────────────────────────────────────────────────
 
-    /// Execute a closure with a named connection, returning a clear error if not connected.
+    /// Execute a closure with a named connection, auto-connecting from config if needed.
     async fn with_connection(&self, server: &str, f: impl AsyncConnectionFn) -> String {
-        match self.pool.get(server).await {
-            Some(conn) => f.call(conn).await,
-            None => {
-                let connected = self.pool.list().await;
-                if connected.is_empty() {
+        // Fast path: already in the pool
+        if let Some(conn) = self.pool.get(server).await {
+            return f.call(conn).await;
+        }
+
+        // Server not in pool — check config for auto-connect or produce an error.
+        // Single lock acquisition handles both the auto-connect lookup and the
+        // "not found" error message listing configured servers.
+        let params = {
+            let cfg = self.config.read().await;
+            if let Some(entry) = cfg.get(server) {
+                params_from_config(server, entry)
+            } else {
+                let names: Vec<&str> = cfg.servers.keys().map(String::as_str).collect();
+                return if names.is_empty() {
                     format!(
-                        "Error: server '{}' is not connected. No servers are currently connected. Use the connect tool first.",
+                        "Error: server '{}' not found. No servers are configured. \
+                         Add servers via 'ssh-hub add <name> <connection>'.",
                         server
                     )
                 } else {
                     format!(
-                        "Error: server '{}' is not connected. Connected servers: {}. Use the connect tool first.",
+                        "Error: server '{}' not found. Configured servers: {}.",
                         server,
-                        connected.join(", ")
+                        names.join(", ")
                     )
-                }
+                };
             }
+        };
+
+        // Auto-connect from config
+        match self.try_auto_connect(server, params).await {
+            Ok(conn) => f.call(conn).await,
+            Err(e) => format!(
+                "Error: server '{}' is configured but auto-connect failed: {}",
+                server, e
+            ),
         }
+    }
+
+    /// Connect to a server using pre-resolved params and add it to the pool.
+    async fn try_auto_connect(
+        &self,
+        server: &str,
+        params: ConnectionParams,
+    ) -> Result<Arc<SshConnection>> {
+        tracing::info!("Auto-connecting to configured server '{}'", server);
+
+        let conn = SshConnection::connect(params).await?;
+        self.pool.insert(server.to_string(), conn).await;
+
+        // pool.insert wraps in Arc; retrieve it so the caller gets the pooled Arc
+        self.pool
+            .get(server)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Connection lost immediately after insertion"))
     }
 
     /// Run the MCP server on stdio.
@@ -159,8 +188,8 @@ impl ServerHandler for RemoteSessionServer {
                  IMPORTANT: These tools operate on REMOTE servers over SSH — not the local machine. \
                  You already have local tools for local operations. Before using any remote tool, \
                  decide whether the target belongs to the local environment or a remote server.\n\
-                 Workflow: connect -> use remote_*/sync_* tools -> disconnect.\n\
-                 All remote_* and sync_* tools require a 'server' parameter — the alias of a connected server."
+                 Workflow: list_servers to discover available servers -> use remote_*/sync_* tools (auto-connects configured servers).\n\
+                 All remote_* and sync_* tools require a 'server' parameter — the name of a configured server."
                     .to_string(),
             ),
         }

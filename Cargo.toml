@@ -1,6 +1,6 @@
 [package]
 name = "ssh-hub"
-version = "0.6.0"
+version = "0.7.0"
 edition = "2021"
 description = "MCP server for remote SSH sessions"
 license = "MIT"
@@ -26,6 +26,9 @@ clap = { version = "4", features = ["derive"] }
 
 # Config
 toml = "0.8"
+
+# Async utilities
+futures = "0.3"
 
 # Utils
 anyhow = "1"

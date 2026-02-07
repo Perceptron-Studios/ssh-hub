@@ -7,6 +7,13 @@ pub struct ListServersInput {
     pub include_configured: Option<bool>,
 }
 
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ReachabilityInfo {
+    pub reachable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ConnectedServerInfo {
     pub name: String,
@@ -14,6 +21,7 @@ pub struct ConnectedServerInfo {
     pub user: String,
     pub port: u16,
     pub remote_path: String,
+    pub reachability: ReachabilityInfo,
 }
 
 #[derive(Debug, Serialize)]
@@ -25,6 +33,7 @@ pub struct ConfiguredServerInfo {
     pub remote_path: String,
     pub auth: String,
     pub connected: bool,
+    pub reachability: ReachabilityInfo,
 }
 
 #[derive(Debug, Serialize)]
