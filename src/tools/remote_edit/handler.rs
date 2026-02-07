@@ -13,16 +13,17 @@ pub async fn handle(conn: Arc<SshConnection>, input: RemoteEditInput) -> String 
         Err(e) => return format!("Error reading file: {}", e),
     };
 
-    if !content.contains(&input.old_string) {
-        return format!("String '{}' not found in file", input.old_string);
-    }
-
     let replace_all = input.replace_all.unwrap_or(false);
     let new_content = if replace_all {
         content.replace(&input.old_string, &input.new_string)
     } else {
         content.replacen(&input.old_string, &input.new_string, 1)
     };
+
+    // If unchanged, the old_string was never found
+    if new_content == content {
+        return format!("String '{}' not found in file", input.old_string);
+    }
 
     match conn.write_file(&path, &new_content).await {
         Ok(()) => format!("Successfully edited {}", path),

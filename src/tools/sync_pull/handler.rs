@@ -45,7 +45,7 @@ pub async fn handle(conn: Arc<SshConnection>, input: SyncPullInput) -> String {
 }
 
 async fn pull_single_file(conn: &SshConnection, remote_path: &str, local_dest: &str) -> String {
-    let content = match conn.read_file(remote_path).await {
+    let content = match conn.read_file_raw(remote_path).await {
         Ok(c) => c,
         Err(e) => {
             return SyncOutput::failure(remote_path, format!("Error reading remote file: {}", e))
@@ -119,31 +119,38 @@ async fn pull_directory(
         .to_json();
     }
 
-    // Extract tar.gz locally
-    let decoder = GzDecoder::new(Cursor::new(&raw_result.stdout));
-    let mut archive = tar::Archive::new(decoder);
+    // Extract tar.gz locally (synchronous I/O — run off the tokio runtime)
+    let dest_owned = dest.to_path_buf();
+    let tar_data = raw_result.stdout;
+    let local_dest_str = local_dest.to_string();
 
-    let entries = match archive.entries() {
-        Ok(entries) => entries,
-        Err(e) => {
-            return SyncOutput::failure(
-                local_dest,
-                format!("Error extracting archive: {}", e),
-            )
-            .to_json();
+    match tokio::task::spawn_blocking(move || {
+        let decoder = GzDecoder::new(Cursor::new(&tar_data));
+        let mut archive = tar::Archive::new(decoder);
+
+        let entries = archive.entries().map_err(|e| e.to_string())?;
+
+        let pulled: Vec<String> = entries
+            .filter_map(|entry| entry.ok())
+            .filter_map(|mut entry| {
+                let path = entry.path().ok()?.to_string_lossy().to_string();
+                entry.unpack_in(&dest_owned).ok()?;
+                Some(path)
+            })
+            .collect();
+
+        Ok::<_, String>(pulled)
+    })
+    .await
+    {
+        Ok(Ok(pulled)) => SyncOutput::success(pulled).to_json(),
+        Ok(Err(e)) => {
+            SyncOutput::failure(&local_dest_str, format!("Error extracting archive: {}", e))
+                .to_json()
         }
-    };
-
-    // Skip entries that fail to read or unpack -- only successfully
-    // extracted files appear in the output's `transferred` list.
-    let pulled: Vec<String> = entries
-        .filter_map(|entry| entry.ok())
-        .filter_map(|mut entry| {
-            let path = entry.path().ok()?.to_string_lossy().to_string();
-            entry.unpack_in(dest).ok()?;
-            Some(path)
-        })
-        .collect();
-
-    SyncOutput::success(pulled).to_json()
+        Err(e) => {
+            SyncOutput::failure(&local_dest_str, format!("Extraction task panicked: {}", e))
+                .to_json()
+        }
+    }
 }

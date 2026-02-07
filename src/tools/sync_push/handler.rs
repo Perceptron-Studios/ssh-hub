@@ -74,7 +74,7 @@ pub async fn handle(conn: Arc<SshConnection>, input: SyncPushInput) -> String {
 async fn push_single_file(conn: &SshConnection, local: &Path, remote_dest: &str) -> String {
     let path_str = local.display().to_string();
 
-    let content = match tokio::fs::read_to_string(local).await {
+    let content = match tokio::fs::read(local).await {
         Ok(c) => c,
         Err(e) => {
             return SyncOutput::failure(&path_str, format!("Error reading local file: {}", e))
@@ -82,7 +82,7 @@ async fn push_single_file(conn: &SshConnection, local: &Path, remote_dest: &str)
         }
     };
 
-    match conn.write_file(remote_dest, &content).await {
+    match conn.write_file_raw(remote_dest, &content).await {
         Ok(()) => SyncOutput::success(vec![path_str]).to_json(),
         Err(e) => SyncOutput::failure(path_str, e.to_string()).to_json(),
     }
@@ -99,25 +99,49 @@ async fn push_directory(
     // Collect file list (path traversal is validated inside build_tar_gz)
     let files = match files_filter {
         Some(f) => f.to_vec(),
-        None => match walk_dir(local_dir) {
-            Ok(f) => f,
-            Err(e) => {
-                return SyncOutput::failure(&dir_str, format!("Error walking directory: {}", e))
+        None => {
+            let dir_owned = local_dir.to_path_buf();
+            match tokio::task::spawn_blocking(move || walk_dir(&dir_owned)).await {
+                Ok(Ok(f)) => f,
+                Ok(Err(e)) => {
+                    return SyncOutput::failure(
+                        &dir_str,
+                        format!("Error walking directory: {}", e),
+                    )
                     .to_json();
+                }
+                Err(e) => {
+                    return SyncOutput::failure(
+                        &dir_str,
+                        format!("Directory walk task panicked: {}", e),
+                    )
+                    .to_json();
+                }
             }
-        },
+        }
     };
 
     if files.is_empty() {
         return SyncOutput::failure(&dir_str, "No files to push").to_json();
     }
 
-    // Build tar.gz in memory
-    let tar_bytes = match build_tar_gz(local_dir, &files) {
-        Ok(b) => b,
-        Err(e) => {
+    // Build tar.gz in memory (CPU-bound gzip compression)
+    let dir_owned = local_dir.to_path_buf();
+    let files_clone = files.clone();
+    let tar_bytes = match tokio::task::spawn_blocking(move || build_tar_gz(&dir_owned, &files_clone))
+        .await
+    {
+        Ok(Ok(b)) => b,
+        Ok(Err(e)) => {
             return SyncOutput::failure(&dir_str, format!("Error building archive: {}", e))
                 .to_json();
+        }
+        Err(e) => {
+            return SyncOutput::failure(
+                &dir_str,
+                format!("Archive build task panicked: {}", e),
+            )
+            .to_json();
         }
     };
 

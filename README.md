@@ -23,7 +23,7 @@ ssh-hub update
 
 ```bash
 # 1. Add a remote server
-ssh-hub add myserver user@host:/path/to/project
+ssh-hub add <SERVER_ALIAS> user@host
 
 # 2. Register as MCP in your project
 ssh-hub mcp-install /path/to/project
@@ -42,21 +42,22 @@ user@host:2222:/path       # custom port and path
 
 For passphrase-protected keys, pass `-i` during `add` — ssh-hub will load the key into your SSH agent:
 
+NOTE: If a phrase is required to access the private key, this command will ask for passphrase via ssh-add and store it securely.
+
 ```bash
-ssh-hub add myserver user@host -i ~/.ssh/my_key
-# Prompts for passphrase via ssh-add, then tests the connection
+ssh-hub add <SERVER_ALIAS> user@host -i ~/.ssh/my_key
 ```
 
 ## CLI commands
 
-| Command | Description |
-|---------|-------------|
-| `ssh-hub` | Start MCP server on stdio (used by MCP clients) |
-| `ssh-hub add <name> <connection>` | Add a server (tests connection, then saves) |
-| `ssh-hub remove <name>` | Remove a server from config |
-| `ssh-hub list` | List configured servers |
-| `ssh-hub mcp-install [directory]` | Register ssh-hub as MCP server in a project |
-| `ssh-hub update` | Update to the latest release |
+| Command                           | Description                                     |
+| --------------------------------- | ----------------------------------------------- |
+| `ssh-hub`                         | Start MCP server on stdio (used by MCP clients) |
+| `ssh-hub list`                    | List configured servers                         |
+| `ssh-hub add <name> <connection>` | Add a server (tests connection, then saves)     |
+| `ssh-hub remove <name>`           | Remove a server from config                     |
+| `ssh-hub mcp-install [directory]` | Register ssh-hub as MCP server in a project     |
+| `ssh-hub update`                  | Update to the latest release                    |
 
 **Options:** `-v` verbose logging, `-i <path>` identity file, `-p <port>` port override.
 
@@ -66,8 +67,8 @@ ssh-hub add myserver user@host -i ~/.ssh/my_key
 
 All authentication is SSH-key based. No passwords are stored or transmitted. Keys are tried in order:
 
-1. **SSH agent** — keys loaded via `ssh-add`, signing delegated to `ssh-agent`
-2. **Identity file** — key specified with `-i` during `add`
+1. **Identity file** — key specified with `-i` during `add` (highest signal)
+2. **SSH agent** — keys loaded via `ssh-add`, signing delegated to `ssh-agent` (capped at 10 keys)
 3. **Default keys** — `~/.ssh/id_ed25519`, `id_rsa`, `id_ecdsa`
 
 RSA keys are automatically negotiated with SHA-256/SHA-512 signatures (modern servers reject legacy SHA-1).

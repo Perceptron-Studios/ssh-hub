@@ -150,22 +150,34 @@ impl SshConnection {
         &self.params
     }
 
+    /// Check whether the underlying SSH session has been closed.
+    pub async fn is_closed(&self) -> bool {
+        let session = self.session.lock().await;
+        session.is_closed()
+    }
+
     /// Open a channel, execute a command, and collect all output with an optional timeout.
     ///
     /// If `stdin_data` is provided, it is written to the channel in
     /// [`STDIN_CHUNK_SIZE`] chunks before reading output.
+    ///
+    /// The session mutex is held only for `channel_open_session` — all
+    /// subsequent I/O uses the independent `Channel`, allowing concurrent
+    /// commands over the same SSH connection.
     async fn run_channel(
         &self,
         command: &str,
         stdin_data: Option<&[u8]>,
         timeout_ms: Option<u64>,
     ) -> Result<ChannelOutput> {
-        let session = self.session.lock().await;
-
-        let mut channel = session
-            .channel_open_session()
-            .await
-            .context("Failed to open channel")?;
+        // Lock ONLY for channel creation, then drop
+        let mut channel = {
+            let session = self.session.lock().await;
+            session
+                .channel_open_session()
+                .await
+                .context("Failed to open channel")?
+        };
 
         let full_command = format!(
             "cd {} && {}",
@@ -240,8 +252,8 @@ impl SshConnection {
     pub async fn exec(&self, command: &str, timeout_ms: Option<u64>) -> Result<ExecResult> {
         let output = self.run_channel(command, None, timeout_ms).await?;
         Ok(ExecResult {
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             exit_code: output.exit_code,
         })
     }
@@ -260,40 +272,61 @@ impl SshConnection {
         let output = self.run_channel(command, stdin_data, timeout_ms).await?;
         Ok(ExecRawResult {
             stdout: output.stdout,
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
             exit_code: output.exit_code,
         })
     }
 
-    /// Read a file from the remote machine.
+    /// Read a file as raw bytes from the remote machine.
     ///
     /// # Errors
     /// Returns an error if the remote `cat` command fails or the file does not exist.
-    pub async fn read_file(&self, path: &str) -> Result<String> {
+    pub async fn read_file_raw(&self, path: &str) -> Result<Vec<u8>> {
         let command = format!("cat {}", shell_escape_remote_path(path));
-        let result = self.exec(&command, Some(FILE_IO_TIMEOUT_MS)).await?;
+        let result = self
+            .exec_raw(&command, None, Some(FILE_IO_TIMEOUT_MS))
+            .await?;
         if result.exit_code != 0 {
             return Err(anyhow!("Failed to read file: {}", result.stderr));
         }
         Ok(result.stdout)
     }
 
-    /// Write content to a file on the remote machine.
+    /// Read a file as UTF-8 text from the remote machine.
+    ///
+    /// Invalid UTF-8 sequences are replaced with the Unicode replacement character.
+    ///
+    /// # Errors
+    /// Returns an error if the remote `cat` command fails or the file does not exist.
+    pub async fn read_file(&self, path: &str) -> Result<String> {
+        let bytes = self.read_file_raw(path).await?;
+        Ok(String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    /// Write raw bytes to a file on the remote machine.
     ///
     /// Uses stdin piping instead of heredoc to avoid delimiter collisions.
     ///
     /// # Errors
     /// Returns an error if the remote write command fails.
-    pub async fn write_file(&self, path: &str, content: &str) -> Result<()> {
+    pub async fn write_file_raw(&self, path: &str, content: &[u8]) -> Result<()> {
         let escaped_path = shell_escape_remote_path(path);
         let command = format!("cat > {}", escaped_path);
         let result = self
-            .exec_raw(&command, Some(content.as_bytes()), Some(FILE_IO_TIMEOUT_MS))
+            .exec_raw(&command, Some(content), Some(FILE_IO_TIMEOUT_MS))
             .await?;
         if result.exit_code != 0 {
             return Err(anyhow!("Failed to write file: {}", result.stderr));
         }
         Ok(())
+    }
+
+    /// Write UTF-8 text to a file on the remote machine.
+    ///
+    /// # Errors
+    /// Returns an error if the remote write command fails.
+    pub async fn write_file(&self, path: &str, content: &str) -> Result<()> {
+        self.write_file_raw(path, content.as_bytes()).await
     }
 
     /// List files matching a glob pattern.

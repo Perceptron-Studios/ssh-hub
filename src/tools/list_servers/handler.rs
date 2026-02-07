@@ -9,21 +9,20 @@ pub async fn handle(
     config: &RwLock<ServerRegistry>,
     input: ListServersInput,
 ) -> String {
-    let connected_names = pool.list().await;
-    let mut connected = Vec::new();
+    // Single lock acquisition for all connected server details
+    let details = pool.list_with_details().await;
+    let connected_names: Vec<String> = details.iter().map(|(name, _)| name.clone()).collect();
 
-    for name in &connected_names {
-        if let Some(conn) = pool.get(name).await {
-            let params = conn.params();
-            connected.push(ConnectedServerInfo {
-                name: name.clone(),
-                host: params.host.clone(),
-                user: params.user.clone(),
-                port: params.port,
-                remote_path: params.remote_path.clone(),
-            });
-        }
-    }
+    let connected: Vec<ConnectedServerInfo> = details
+        .into_iter()
+        .map(|(name, params)| ConnectedServerInfo {
+            name,
+            host: params.host,
+            user: params.user,
+            port: params.port,
+            remote_path: params.remote_path,
+        })
+        .collect();
 
     let include_configured = input.include_configured.unwrap_or(true);
     let configured = if include_configured {
@@ -50,6 +49,6 @@ pub async fn handle(
         connected,
         configured,
     };
-    serde_json::to_string_pretty(&output)
+    serde_json::to_string(&output)
         .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {}"}}"#, e))
 }

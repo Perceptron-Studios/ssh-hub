@@ -55,15 +55,22 @@ pub fn normalize_remote_path(path: &str, base_path: &str) -> String {
     }
 }
 
-/// Format file content with line numbers (like Claude Code's Read tool output)
+/// Format file content with line numbers (like Claude Code's Read tool output).
+///
+/// Uses a single pre-allocated `String` instead of collecting into a `Vec` and joining.
 pub fn format_with_line_numbers(content: &str, offset: usize) -> String {
-    content
-        .lines()
-        .enumerate()
-        .map(|(i, line)| {
-            let line_num = offset + i + 1;
-            format!("{:>6}\u{2192}{}", line_num, line)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    use std::fmt::Write;
+
+    // Estimate: ~8 chars prefix + average line length
+    let estimated = content.len() + content.lines().count() * 8;
+    let mut result = String::with_capacity(estimated);
+
+    for (i, line) in content.lines().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        let _ = write!(result, "{:>6}\u{2192}{}", offset + i + 1, line);
+    }
+
+    result
 }

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+use super::session::ConnectionParams;
 use super::SshConnection;
 
 /// Thread-safe pool of named SSH connections.
@@ -17,10 +18,24 @@ impl ConnectionPool {
         }
     }
 
-    /// Get a connection by name. Returns None if not connected.
+    /// Get a connection by name. Returns None if not connected or if the
+    /// underlying SSH session has been closed (stale connections are removed).
     pub async fn get(&self, name: &str) -> Option<Arc<SshConnection>> {
-        let guard = self.connections.read().await;
-        guard.get(name).cloned()
+        let conn = {
+            let guard = self.connections.read().await;
+            guard.get(name).cloned()
+        };
+
+        if let Some(ref c) = conn {
+            if c.is_closed().await {
+                tracing::debug!("Connection '{}' is closed, removing from pool", name);
+                let mut guard = self.connections.write().await;
+                guard.remove(name);
+                return None;
+            }
+        }
+
+        conn
     }
 
     /// Insert a new connection. Returns the previous connection if one existed with this name.
@@ -39,6 +54,15 @@ impl ConnectionPool {
     pub async fn list(&self) -> Vec<String> {
         let guard = self.connections.read().await;
         guard.keys().cloned().collect()
+    }
+
+    /// List all connected servers with their connection parameters in a single lock.
+    pub async fn list_with_details(&self) -> Vec<(String, ConnectionParams)> {
+        let guard = self.connections.read().await;
+        guard
+            .iter()
+            .map(|(name, conn)| (name.clone(), conn.params().clone()))
+            .collect()
     }
 
     /// Check if a server name has an active connection.
