@@ -50,5 +50,6 @@ pub async fn handle(
         connected,
         configured,
     };
-    serde_json::to_string_pretty(&output).unwrap_or_default()
+    serde_json::to_string_pretty(&output)
+        .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {}"}}"#, e))
 }

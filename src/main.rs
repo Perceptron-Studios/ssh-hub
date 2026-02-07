@@ -11,6 +11,9 @@ use ssh_hub::connection;
 use ssh_hub::server::RemoteSessionServer;
 use ssh_hub::server_registry::{self, ServerRegistry};
 
+/// Timeout for the connectivity test after adding a server (10 seconds).
+const CONNECTION_TEST_TIMEOUT_MS: u64 = 10_000;
+
 fn init_logging(verbose: bool) {
     let filter = if verbose {
         EnvFilter::new("debug")
@@ -188,7 +191,7 @@ async fn run_add(
 
     match connection::SshConnection::connect(params).await {
         Ok(conn) => {
-            let _ = conn.exec("echo 'ssh-hub test OK'", Some(10000)).await;
+            let _ = conn.exec("echo 'ssh-hub test OK'", Some(CONNECTION_TEST_TIMEOUT_MS)).await;
 
             config.insert(name.clone(), entry);
             config.save()?;

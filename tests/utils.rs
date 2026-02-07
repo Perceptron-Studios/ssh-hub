@@ -1,11 +1,4 @@
-use ssh_hub::utils::checksum::md5_hash;
 use ssh_hub::utils::path::{format_with_line_numbers, normalize_remote_path};
-
-#[test]
-fn test_md5_hash() {
-    let hash = md5_hash(b"hello world");
-    assert_eq!(hash, "5eb63bbbe01eeed093cb22bb8f5acdc3");
-}
 
 #[test]
 fn test_normalize_absolute_path() {

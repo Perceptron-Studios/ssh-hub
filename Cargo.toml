@@ -1,6 +1,6 @@
 [package]
 name = "ssh-hub"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "MCP server for remote SSH sessions"
 license = "MIT"
@@ -31,7 +31,8 @@ toml = "0.8"
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-md-5 = "0.10"
+tar = "0.4"
+flate2 = "1"
 dirs = "5"
 colored = "3.1.1"
 

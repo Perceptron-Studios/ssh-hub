@@ -9,7 +9,7 @@ pub struct RemoteBashInput {
     #[schemars(description = "The command to execute")]
     pub command: String,
 
-    #[schemars(description = "Optional timeout in milliseconds (max 600000)")]
+    #[schemars(description = "Timeout in milliseconds. Defaults to 120000 (2 min), max 600000 (10 min)")]
     pub timeout: Option<u64>,
 
     #[schemars(description = "Clear, concise description of what this command does")]
