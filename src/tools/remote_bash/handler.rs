@@ -44,7 +44,7 @@ pub async fn handle(conn: Arc<SshConnection>, input: RemoteBashInput) -> String 
                 stderr: result.stderr,
                 exit_code: result.exit_code,
             };
-            serde_json::to_string(&output)
+            serde_json::to_string_pretty(&output)
                 .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {}"}}"#, e))
         }
         Err(e) => format!("Error: {}", e),

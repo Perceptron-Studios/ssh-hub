@@ -42,7 +42,7 @@ impl SyncOutput {
     /// Falls back to a minimal error JSON if serialization fails, which
     /// should never happen since both fields are trivially serializable.
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self)
+        serde_json::to_string_pretty(self)
             .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {}"}}"#, e))
     }
 }
