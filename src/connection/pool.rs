@@ -6,12 +6,19 @@ use super::session::ConnectionParams;
 use super::SshConnection;
 
 /// Thread-safe pool of named SSH connections.
-/// Uses RwLock for concurrent reads (tool execution) and exclusive writes (connect/disconnect).
+/// Uses `RwLock` for concurrent reads (tool execution) and exclusive writes (connect/disconnect).
 pub struct ConnectionPool {
     connections: RwLock<HashMap<String, Arc<SshConnection>>>,
 }
 
+impl Default for ConnectionPool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConnectionPool {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             connections: RwLock::new(HashMap::new()),

@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use flate2::read::GzDecoder;
 
+use super::schema::SyncPullInput;
 use crate::connection::SshConnection;
 use crate::tools::sync_types::SyncOutput;
 use crate::utils::path::{normalize_remote_path, shell_escape, shell_escape_remote_path};
-use super::schema::SyncPullInput;
 
 /// Timeout for the remote `test -d` probe (10 seconds).
 const PROBE_TIMEOUT_MS: u64 = 10_000;
@@ -36,10 +36,10 @@ pub async fn handle(conn: Arc<SshConnection>, input: SyncPullInput) -> String {
 
     // Single file
     let local_dest = input.local_path.unwrap_or_else(|| {
-        Path::new(&input.remote_path)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "downloaded_file".to_string())
+        Path::new(&input.remote_path).file_name().map_or_else(
+            || "downloaded_file".to_string(),
+            |n| n.to_string_lossy().to_string(),
+        )
     });
     pull_single_file(&conn, &remote_path, &local_dest).await
 }
@@ -48,7 +48,7 @@ async fn pull_single_file(conn: &SshConnection, remote_path: &str, local_dest: &
     let content = match conn.read_file_raw(remote_path).await {
         Ok(c) => c,
         Err(e) => {
-            return SyncOutput::failure(remote_path, format!("Error reading remote file: {}", e))
+            return SyncOutput::failure(remote_path, format!("Error reading remote file: {e}"))
                 .to_json();
         }
     };
@@ -59,7 +59,7 @@ async fn pull_single_file(conn: &SshConnection, remote_path: &str, local_dest: &
             if let Err(e) = tokio::fs::create_dir_all(parent).await {
                 return SyncOutput::failure(
                     local_dest,
-                    format!("Error creating local directory: {}", e),
+                    format!("Error creating local directory: {e}"),
                 )
                 .to_json();
             }
@@ -87,13 +87,17 @@ async fn pull_directory(
             .join(" "),
         None => ".".to_string(),
     };
-    let command = format!("tar czf - -C {} {}", shell_escape_remote_path(remote_path), files_arg);
+    let command = format!(
+        "tar czf - -C {} {}",
+        shell_escape_remote_path(remote_path),
+        files_arg
+    );
 
     // Get raw tar bytes from remote
     let raw_result = match conn.exec_raw(&command, None, Some(SYNC_TIMEOUT_MS)).await {
         Ok(r) => r,
         Err(e) => {
-            return SyncOutput::failure(remote_path, format!("Error running remote tar: {}", e))
+            return SyncOutput::failure(remote_path, format!("Error running remote tar: {e}"))
                 .to_json();
         }
     };
@@ -112,11 +116,8 @@ async fn pull_directory(
     // Create local destination
     let dest = Path::new(local_dest);
     if let Err(e) = tokio::fs::create_dir_all(dest).await {
-        return SyncOutput::failure(
-            local_dest,
-            format!("Error creating local directory: {}", e),
-        )
-        .to_json();
+        return SyncOutput::failure(local_dest, format!("Error creating local directory: {e}"))
+            .to_json();
     }
 
     // Extract tar.gz locally (synchronous I/O — run off the tokio runtime)
@@ -131,7 +132,7 @@ async fn pull_directory(
         let entries = archive.entries().map_err(|e| e.to_string())?;
 
         let pulled: Vec<String> = entries
-            .filter_map(|entry| entry.ok())
+            .filter_map(std::result::Result::ok)
             .filter_map(|mut entry| {
                 let path = entry.path().ok()?.to_string_lossy().to_string();
                 entry.unpack_in(&dest_owned).ok()?;
@@ -145,12 +146,10 @@ async fn pull_directory(
     {
         Ok(Ok(pulled)) => SyncOutput::success(pulled).to_json(),
         Ok(Err(e)) => {
-            SyncOutput::failure(&local_dest_str, format!("Error extracting archive: {}", e))
-                .to_json()
+            SyncOutput::failure(&local_dest_str, format!("Error extracting archive: {e}")).to_json()
         }
         Err(e) => {
-            SyncOutput::failure(&local_dest_str, format!("Extraction task panicked: {}", e))
-                .to_json()
+            SyncOutput::failure(&local_dest_str, format!("Extraction task panicked: {e}")).to_json()
         }
     }
 }

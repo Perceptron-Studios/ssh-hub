@@ -11,8 +11,8 @@ use tokio::io::{stdin, stdout};
 use tokio::sync::RwLock;
 
 use crate::cli::params_from_config;
-use crate::server_registry::ServerRegistry;
 use crate::connection::{ConnectionParams, ConnectionPool, SshConnection};
+use crate::server_registry::ServerRegistry;
 use crate::tools;
 
 /// MCP server for remote SSH sessions — manages multiple simultaneous connections.
@@ -25,6 +25,7 @@ pub struct RemoteSessionServer {
 
 #[tool_router]
 impl RemoteSessionServer {
+    #[must_use]
     pub fn new(config: ServerRegistry) -> Self {
         Self {
             pool: Arc::new(ConnectionPool::new()),
@@ -35,55 +36,92 @@ impl RemoteSessionServer {
 
     // ── Management Tools ──────────────────────────────────────────────
 
-    #[tool(description = "List pre-configured and currently connected servers. Use this to discover available servers before connecting. Includes reachability probe (TCP to SSH port) by default.")]
+    #[tool(
+        description = "List pre-configured and currently connected servers. Use this to discover available servers before connecting. Includes reachability probe (TCP to SSH port) by default."
+    )]
     async fn list_servers(&self, Parameters(input): Parameters<tools::ListServersInput>) -> String {
         tools::list_servers::handler::handle(&self.pool, &self.config, input).await
     }
 
     // ── Remote Tools ──────────────────────────────────────────────────
 
-    #[tool(description = "Execute a shell command on a remote server. Commands run from the connection's base path. Use this for git operations, build tools, process management, and any other shell task on the remote machine.")]
+    #[tool(
+        description = "Execute a shell command on a remote server. Commands run from the connection's base path. Use this for git operations, build tools, process management, and any other shell task on the remote machine."
+    )]
     async fn remote_bash(&self, Parameters(input): Parameters<tools::RemoteBashInput>) -> String {
         let server = input.server.clone();
-        self.with_connection(&server, |conn| async { tools::remote_bash::handler::handle(conn, input).await }).await
+        self.with_connection(&server, |conn| async {
+            tools::remote_bash::handler::handle(conn, input).await
+        })
+        .await
     }
 
-    #[tool(description = "Read a file from a remote server. Returns contents with line numbers. For pulling multiple files or directories to the local machine, use sync_pull instead.")]
+    #[tool(
+        description = "Read a file from a remote server. Returns contents with line numbers. For pulling multiple files or directories to the local machine, use sync_pull instead."
+    )]
     async fn remote_read(&self, Parameters(input): Parameters<tools::RemoteReadInput>) -> String {
         let server = input.server.clone();
-        self.with_connection(&server, |conn| async { tools::remote_read::handler::handle(conn, input).await }).await
+        self.with_connection(&server, |conn| async {
+            tools::remote_read::handler::handle(conn, input).await
+        })
+        .await
     }
 
-    #[tool(description = "Write content to a file on a remote server. Overwrites the file if it exists. For pushing multiple files or directories from local, use sync_push instead.")]
+    #[tool(
+        description = "Write content to a file on a remote server. Overwrites the file if it exists. For pushing multiple files or directories from local, use sync_push instead."
+    )]
     async fn remote_write(&self, Parameters(input): Parameters<tools::RemoteWriteInput>) -> String {
         let server = input.server.clone();
-        self.with_connection(&server, |conn| async { tools::remote_write::handler::handle(conn, input).await }).await
+        self.with_connection(&server, |conn| async {
+            tools::remote_write::handler::handle(conn, input).await
+        })
+        .await
     }
 
-    #[tool(description = "Edit a file on a remote server using exact string replacement. The old_string must match uniquely in the file. Use replace_all to change every occurrence.")]
+    #[tool(
+        description = "Edit a file on a remote server using exact string replacement. The old_string must match uniquely in the file. Use replace_all to change every occurrence."
+    )]
     async fn remote_edit(&self, Parameters(input): Parameters<tools::RemoteEditInput>) -> String {
         let server = input.server.clone();
-        self.with_connection(&server, |conn| async { tools::remote_edit::handler::handle(conn, input).await }).await
+        self.with_connection(&server, |conn| async {
+            tools::remote_edit::handler::handle(conn, input).await
+        })
+        .await
     }
 
-    #[tool(description = "Search for files matching a glob pattern on a remote server. Returns matching file paths relative to the search directory.")]
+    #[tool(
+        description = "Search for files matching a glob pattern on a remote server. Returns matching file paths relative to the search directory."
+    )]
     async fn remote_glob(&self, Parameters(input): Parameters<tools::RemoteGlobInput>) -> String {
         let server = input.server.clone();
-        self.with_connection(&server, |conn| async { tools::remote_glob::handler::handle(conn, input).await }).await
+        self.with_connection(&server, |conn| async {
+            tools::remote_glob::handler::handle(conn, input).await
+        })
+        .await
     }
 
     // ── Sync Tools ────────────────────────────────────────────────────
 
-    #[tool(description = "Push local file(s) to a connected remote server. Supports single files and entire directories. Directory transfers use tar streaming for efficiency (one round-trip regardless of file count). Use the 'files' parameter to push a subset of a directory.")]
+    #[tool(
+        description = "Push local file(s) to a connected remote server. Supports single files and entire directories. Directory walks respect .gitignore rules and skip symlinks. Use the 'exclude' parameter for additional exclusion patterns (gitignore syntax)."
+    )]
     async fn sync_push(&self, Parameters(input): Parameters<tools::SyncPushInput>) -> String {
         let server = input.server.clone();
-        self.with_connection(&server, |conn| async { tools::sync_push::handler::handle(conn, input).await }).await
+        self.with_connection(&server, |conn| async {
+            tools::sync_push::handler::handle(conn, input).await
+        })
+        .await
     }
 
-    #[tool(description = "Pull remote file(s) from a connected server to the local machine. Supports single files and entire directories. Directory transfers use tar streaming for efficiency (one round-trip regardless of file count). Use the 'files' parameter to pull a subset of a directory.")]
+    #[tool(
+        description = "Pull remote file(s) from a connected server to the local machine. Supports single files and entire directories. Use the 'files' parameter to pull a subset of a directory."
+    )]
     async fn sync_pull(&self, Parameters(input): Parameters<tools::SyncPullInput>) -> String {
         let server = input.server.clone();
-        self.with_connection(&server, |conn| async { tools::sync_pull::handler::handle(conn, input).await }).await
+        self.with_connection(&server, |conn| async {
+            tools::sync_pull::handler::handle(conn, input).await
+        })
+        .await
     }
 
     // ── Internals ─────────────────────────────────────────────────────
@@ -106,9 +144,8 @@ impl RemoteSessionServer {
                 let names: Vec<&str> = cfg.servers.keys().map(String::as_str).collect();
                 return if names.is_empty() {
                     format!(
-                        "Error: server '{}' not found. No servers are configured. \
-                         Add servers via 'ssh-hub add <name> <connection>'.",
-                        server
+                        "Error: server '{server}' not found. No servers are configured. \
+                         Add servers via 'ssh-hub add <name> <connection>'."
                     )
                 } else {
                     format!(
@@ -123,10 +160,9 @@ impl RemoteSessionServer {
         // Auto-connect from config
         match self.try_auto_connect(server, params).await {
             Ok(conn) => f.call(conn).await,
-            Err(e) => format!(
-                "Error: server '{}' is configured but auto-connect failed: {}",
-                server, e
-            ),
+            Err(e) => {
+                format!("Error: server '{server}' is configured but auto-connect failed: {e}")
+            }
         }
     }
 
@@ -149,6 +185,10 @@ impl RemoteSessionServer {
     }
 
     /// Run the MCP server on stdio.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the stdio transport or MCP service fails.
     pub async fn run(self) -> Result<()> {
         let transport = (stdin(), stdout());
         tracing::info!("Starting MCP server on stdio");

@@ -68,29 +68,33 @@ impl client::Handler for SshHandler {
                 // TOFU: first time seeing this host — learn the key
                 tracing::info!(
                     "New host key for {}:{}, adding to known_hosts",
-                    self.host, self.port
+                    self.host,
+                    self.port
                 );
-                if let Err(e) = known_hosts::learn_known_hosts(
-                    &self.host, self.port, server_public_key,
-                ) {
+                if let Err(e) =
+                    known_hosts::learn_known_hosts(&self.host, self.port, server_public_key)
+                {
                     tracing::warn!("Failed to save host key to known_hosts: {}", e);
                 }
                 Ok(true)
             }
-            Err(russh::keys::Error::KeyChanged { line }) => {
-                Err(anyhow!(
-                    "HOST KEY VERIFICATION FAILED for {}:{}. \
+            Err(russh::keys::Error::KeyChanged { line }) => Err(anyhow!(
+                "HOST KEY VERIFICATION FAILED for {}:{}. \
                      The server's key has changed since it was last recorded \
                      (known_hosts line {}). This could indicate a man-in-the-middle attack. \
                      If the server was legitimately reinstalled, remove line {} from \
                      ~/.ssh/known_hosts and reconnect.",
-                    self.host, self.port, line, line
-                ))
-            }
+                self.host,
+                self.port,
+                line,
+                line
+            )),
             Err(e) => {
                 tracing::warn!(
                     "Could not verify host key for {}:{}: {}. Accepting.",
-                    self.host, self.port, e
+                    self.host,
+                    self.port,
+                    e
                 );
                 Ok(true)
             }
@@ -113,6 +117,11 @@ pub struct SshConnection {
 
 impl SshConnection {
     /// Establish a new SSH connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the TCP connection, SSH handshake, or
+    /// authentication fails.
     pub async fn connect(params: ConnectionParams) -> Result<Self> {
         tracing::debug!(
             "Connecting to {}@{}:{} (path: {})",
@@ -125,10 +134,9 @@ impl SshConnection {
         let config = Arc::new(client::Config::default());
         let handler = SshHandler::new(params.host.clone(), params.port);
 
-        let mut session =
-            client::connect(config, (params.host.as_str(), params.port), handler)
-                .await
-                .context("Failed to connect to SSH server")?;
+        let mut session = client::connect(config, (params.host.as_str(), params.port), handler)
+            .await
+            .context("Failed to connect to SSH server")?;
 
         auth::authenticate(&mut session, &params).await?;
 
@@ -141,11 +149,13 @@ impl SshConnection {
     }
 
     /// Get the base remote path for this connection.
+    #[must_use]
     pub fn remote_path(&self) -> &str {
         &self.params.remote_path
     }
 
     /// Get the connection parameters.
+    #[must_use]
     pub fn params(&self) -> &ConnectionParams {
         &self.params
     }
@@ -218,9 +228,8 @@ impl SshConnection {
                         }
                     }
                     Some(ChannelMsg::ExitStatus { exit_status }) => {
-                        exit_code = Some(exit_status as i32);
+                        exit_code = Some(exit_status.cast_signed());
                     }
-                    Some(ChannelMsg::Eof) => {}
                     None => break,
                     _ => {}
                 }
@@ -311,7 +320,7 @@ impl SshConnection {
     /// Returns an error if the remote write command fails.
     pub async fn write_file_raw(&self, path: &str, content: &[u8]) -> Result<()> {
         let escaped_path = shell_escape_remote_path(path);
-        let command = format!("cat > {}", escaped_path);
+        let command = format!("cat > {escaped_path}");
         let result = self
             .exec_raw(&command, Some(content), Some(FILE_IO_TIMEOUT_MS))
             .await?;
@@ -339,7 +348,9 @@ impl SshConnection {
             .exec(
                 &format!(
                     "cd {} && find . -path {} -type f 2>/dev/null | head -{}",
-                    shell_escape_remote_path(path), shell_escape(pattern), GLOB_MAX_RESULTS
+                    shell_escape_remote_path(path),
+                    shell_escape(pattern),
+                    GLOB_MAX_RESULTS
                 ),
                 Some(GLOB_TIMEOUT_MS),
             )

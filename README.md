@@ -112,6 +112,10 @@ user = "deploy"
 remote_path = "~"
 ```
 
+## Troubleshooting
+
+See [docs/troubleshooting.md](docs/troubleshooting.md) for common issues — SSH key setup for standard servers and cloud providers (GCP, AWS), passphrase-protected keys, and authentication failures.
+
 ## License
 
 MIT

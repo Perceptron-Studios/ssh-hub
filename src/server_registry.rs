@@ -41,6 +41,9 @@ fn default_remote_path() -> String {
 }
 
 impl ServerRegistry {
+    /// # Errors
+    ///
+    /// Returns an error if the config file exists but cannot be read or parsed.
     pub fn load() -> Result<Self> {
         let path = Self::config_path()?;
         if !path.exists() {
@@ -50,6 +53,10 @@ impl ServerRegistry {
         Ok(toml::from_str(&content)?)
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be created or the file
+    /// cannot be written.
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path()?;
         if let Some(parent) = path.parent() {
@@ -86,14 +93,16 @@ impl ServerRegistry {
         Ok(())
     }
 
+    /// # Errors
+    ///
+    /// Returns an error if the platform config directory cannot be determined.
     pub fn config_path() -> Result<PathBuf> {
         let config_dir =
             dirs::config_dir().ok_or_else(|| anyhow!("Could not determine config directory"))?;
-        Ok(config_dir
-            .join("ssh-hub")
-            .join("servers.toml"))
+        Ok(config_dir.join("ssh-hub").join("servers.toml"))
     }
 
+    #[must_use]
     pub fn get(&self, name: &str) -> Option<&ServerEntry> {
         self.servers.get(name)
     }

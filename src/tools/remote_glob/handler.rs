@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use crate::connection::SshConnection;
 use super::schema::RemoteGlobInput;
+use crate::connection::SshConnection;
 
 pub async fn handle(conn: Arc<SshConnection>, input: RemoteGlobInput) -> String {
     let base_path = conn.remote_path().to_string();
@@ -13,8 +13,8 @@ pub async fn handle(conn: Arc<SshConnection>, input: RemoteGlobInput) -> String 
         Ok(files) => {
             let result = json!({ "files": files });
             serde_json::to_string_pretty(&result)
-                .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {}"}}"#, e))
+                .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {e}"}}"#))
         }
-        Err(e) => format!("Error searching files: {}", e),
+        Err(e) => format!("Error searching files: {e}"),
     }
 }

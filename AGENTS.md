@@ -11,12 +11,12 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 
 ## Architecture
 
-- `src/main.rs` — CLI handlers (add, remove, list, mcp-install, update). Colored output via `colored` crate.
-- `src/cli.rs` — Clap definitions, connection string parsing, `ConnectionParams` builders
+- `src/main.rs` — Entry point: init logging, dispatch to CLI or MCP server
+- `src/cli/` — CLI command handlers, one file per command (`add.rs`, `remove.rs`, `list.rs`, `mcp_install.rs`, `update.rs`). `mod.rs` has Clap definitions, connection string parsing, and the `run()` dispatcher
 - `src/server.rs` — MCP server (`RemoteSessionServer`) using `rmcp` macros (`#[tool_router]`, `#[tool_handler]`)
 - `src/connection/` — `auth.rs` (agent/key fallback chain, RSA hash negotiation), `session.rs` (SSH session), `pool.rs` (connection pool)
 - `src/tools/` — one module per MCP tool, each with `mod.rs` + `schema.rs` + `handler.rs`. Shared sync types in `sync_types.rs`
-- `src/utils/` — `path.rs` (normalization, line number formatting)
+- `src/utils/` — `path.rs` (normalization, line number formatting), `gitignore.rs` (pattern matching)
 
 ## Key patterns
 
@@ -39,9 +39,23 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 3. GitHub Action (`.github/workflows/tag.yml`) auto-creates a `vX.Y.Z` tag if it doesn't exist
 4. Users pick up the new version via `ssh-hub update`
 
+## Code quality
+
+Before committing or considering work done, **always run these checks**:
+
+```bash
+cargo fmt --check   # Formatting (rustfmt.toml config)
+cargo clippy        # Linting (pedantic, configured in Cargo.toml [lints.clippy])
+cargo test          # Unit + integration tests
+```
+
+- **Formatting**: `cargo fmt` to auto-fix. Config in `rustfmt.toml` (100-char width, 4-space tabs).
+- **Linting**: `clippy::pedantic` is enabled project-wide. Fix all warnings — do not add `#[allow]` attributes. CI runs `cargo clippy -- -D warnings` (warnings are errors).
+- **CI**: `.github/workflows/ci.yml` runs all three checks on push/PR to main.
+
 ## Testing
 
-- `cargo test` — unit tests for CLI parsing, config, path utils
+- `cargo test` — unit tests for CLI parsing, config, path utils, gitignore
 - **MCP integration testing** — the primary validation for tool changes. Install locally (`cargo install --path .`), restart the MCP server, connect to a real server, and exercise the affected tools. See [docs/testing.md](docs/testing.md) for details.
 
 ## References

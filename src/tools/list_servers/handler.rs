@@ -5,20 +5,23 @@ use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
 
+use super::schema::{
+    ConfiguredServerInfo, ConnectedServerInfo, ListServersInput, ListServersOutput,
+    ReachabilityInfo,
+};
 use crate::connection::ConnectionPool;
 use crate::server_registry::ServerRegistry;
-use super::schema::*;
 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// TCP-level reachability probe to the SSH port.
 async fn probe_reachability(host: &str, port: u16) -> ReachabilityInfo {
-    let addr = format!("{}:{}", host, port);
+    let addr = format!("{host}:{port}");
     let start = Instant::now();
     match timeout(PROBE_TIMEOUT, TcpStream::connect(&addr)).await {
         Ok(Ok(_)) => ReachabilityInfo {
             reachable: true,
-            latency_ms: Some(start.elapsed().as_millis() as u64),
+            latency_ms: Some(u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)),
         },
         _ => ReachabilityInfo {
             reachable: false,
@@ -43,7 +46,9 @@ async fn apply_reachability(
         targets.extend(cfg.iter().map(|s| (s.host.as_str(), s.port)));
     }
 
-    let probes = targets.iter().map(|(host, port)| probe_reachability(host, *port));
+    let probes = targets
+        .iter()
+        .map(|(host, port)| probe_reachability(host, *port));
     let results = join_all(probes).await;
     let (conn_results, cfg_results) = results.split_at(connected_count);
 
@@ -111,5 +116,5 @@ pub async fn handle(
         configured,
     };
     serde_json::to_string_pretty(&output)
-        .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {}"}}"#, e))
+        .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {e}"}}"#))
 }

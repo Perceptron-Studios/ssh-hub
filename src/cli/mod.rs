@@ -1,10 +1,16 @@
+mod add;
+mod list;
+mod mcp_install;
+mod remove;
+mod update;
+
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
 
 use crate::connection::ConnectionParams;
-use crate::server_registry::{AuthMethod, ServerEntry};
+use crate::server_registry::ServerEntry;
 
 /// MCP server for remote SSH sessions
 #[derive(Parser, Debug)]
@@ -71,6 +77,40 @@ pub enum Command {
     },
 }
 
+/// Dispatch a CLI command to its handler.
+///
+/// # Errors
+///
+/// Returns an error if the command's underlying operation fails (I/O, network,
+/// config parse, etc.).
+pub async fn run(command: Command) -> Result<()> {
+    match command {
+        Command::Add {
+            name,
+            connection,
+            port,
+            identity,
+        } => add::run(name, connection, port, identity).await,
+
+        Command::Remove { name } => remove::run(&name),
+
+        Command::List => {
+            list::run();
+            Ok(())
+        }
+
+        Command::McpInstall {
+            directory,
+            claude,
+            codex,
+        } => mcp_install::run(&directory, claude, codex),
+
+        Command::Update { check } => update::run(check),
+    }
+}
+
+// ── Connection string parsing ────────────────────────────────────────
+
 const DEFAULT_PORT: u16 = 22;
 const DEFAULT_REMOTE_PATH: &str = "~";
 
@@ -88,11 +128,16 @@ pub struct ConnectionInfo {
 ///   user@host:/path        — with path, default port
 ///   user@host:port         — no path, custom port
 ///   user@host:port:/path   — with path, custom port
+///
+/// # Errors
+///
+/// Returns an error if the connection string is malformed (missing `@`,
+/// empty user/host, invalid port number, or invalid path).
 pub fn parse_connection_string(conn: &str, port_override: Option<u16>) -> Result<ConnectionInfo> {
     // Split user@host from the rest (everything after the first ':')
     let (user_host, rest) = match conn.split_once(':') {
         Some(parts) => parts,
-        None => (conn, ""),  // no colon: just user@host
+        None => (conn, ""), // no colon: just user@host
     };
 
     let (user, host) = user_host
@@ -116,7 +161,7 @@ pub fn parse_connection_string(conn: &str, port_override: Option<u16>) -> Result
         // user@host:port:/path or user@host:port:
         let port: u16 = port_str
             .parse()
-            .map_err(|_| anyhow!("Invalid port number: {}", port_str))?;
+            .map_err(|_| anyhow!("Invalid port number: {port_str}"))?;
 
         if path.is_empty() {
             (port, DEFAULT_REMOTE_PATH.to_string())
@@ -130,10 +175,7 @@ pub fn parse_connection_string(conn: &str, port_override: Option<u16>) -> Result
     } else {
         // user@host:port (no second colon, rest is just a number)
         let port: u16 = rest.parse().map_err(|_| {
-            anyhow!(
-                "Invalid connection string: '{}' is not a port number or path",
-                rest
-            )
+            anyhow!("Invalid connection string: '{rest}' is not a port number or path")
         })?;
         (port, DEFAULT_REMOTE_PATH.to_string())
     };
@@ -146,36 +188,21 @@ pub fn parse_connection_string(conn: &str, port_override: Option<u16>) -> Result
     })
 }
 
-/// Build ConnectionParams from a ServerEntry (config file)
+/// Build `ConnectionParams` from a `ServerEntry` (config file)
+#[must_use]
 pub fn params_from_config(name: &str, entry: &ServerEntry) -> ConnectionParams {
     ConnectionParams {
         host: entry.host.clone(),
         user: entry.user.clone(),
         port: entry.port,
         remote_path: entry.remote_path.clone(),
-        identity: entry.identity.as_ref().map(|p| PathBuf::from(shellexpand_tilde(p))),
+        identity: entry
+            .identity
+            .as_ref()
+            .map(|p| PathBuf::from(shellexpand_tilde(p))),
         auth_method: entry.auth.clone(),
         server_name: Some(name.to_string()),
     }
-}
-
-/// Build ConnectionParams from a connection string (ad-hoc)
-pub fn params_from_connection_string(
-    name: &str,
-    connection: &str,
-    port_override: Option<u16>,
-    identity: Option<&str>,
-) -> Result<ConnectionParams> {
-    let info = parse_connection_string(connection, port_override)?;
-    Ok(ConnectionParams {
-        host: info.host,
-        user: info.user,
-        port: info.port,
-        remote_path: info.remote_path,
-        identity: identity.map(|p| PathBuf::from(shellexpand_tilde(p))),
-        auth_method: AuthMethod::Auto,
-        server_name: Some(name.to_string()),
-    })
 }
 
 /// Simple tilde expansion for paths

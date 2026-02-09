@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
+use super::schema::RemoteEditInput;
 use crate::connection::SshConnection;
 use crate::utils::path::normalize_remote_path;
-use super::schema::RemoteEditInput;
 
 pub async fn handle(conn: Arc<SshConnection>, input: RemoteEditInput) -> String {
     let base_path = conn.remote_path().to_string();
@@ -10,7 +10,7 @@ pub async fn handle(conn: Arc<SshConnection>, input: RemoteEditInput) -> String 
 
     let content = match conn.read_file(&path).await {
         Ok(c) => c,
-        Err(e) => return format!("Error reading file: {}", e),
+        Err(e) => return format!("Error reading file: {e}"),
     };
 
     let replace_all = input.replace_all.unwrap_or(false);
@@ -26,7 +26,7 @@ pub async fn handle(conn: Arc<SshConnection>, input: RemoteEditInput) -> String 
     }
 
     match conn.write_file(&path, &new_content).await {
-        Ok(()) => format!("Successfully edited {}", path),
-        Err(e) => format!("Error writing file: {}", e),
+        Ok(()) => format!("Successfully edited {path}"),
+        Err(e) => format!("Error writing file: {e}"),
     }
 }

@@ -17,9 +17,10 @@ pub async fn authenticate(
         crate::server_registry::AuthMethod::Auto => authenticate_auto(session, params).await,
         crate::server_registry::AuthMethod::Agent => try_agent_auth(session, &params.user).await,
         crate::server_registry::AuthMethod::Key => {
-            let key_path = params.identity.as_ref().ok_or_else(|| {
-                anyhow!("Auth method is 'key' but no identity file specified")
-            })?;
+            let key_path = params
+                .identity
+                .as_ref()
+                .ok_or_else(|| anyhow!("Auth method is 'key' but no identity file specified"))?;
             if try_key_auth(session, &params.user, key_path).await? {
                 Ok(())
             } else {
@@ -99,9 +100,9 @@ async fn query_rsa_hash(session: &mut Handle<SshHandler>) -> Option<HashAlg> {
 }
 
 /// Get the RSA hash for a key, using the cached value for RSA keys.
-fn rsa_hash_for_key(key: &PublicKey, cached_rsa_hash: &Option<HashAlg>) -> Option<HashAlg> {
+fn rsa_hash_for_key(key: &PublicKey, cached_rsa_hash: Option<HashAlg>) -> Option<HashAlg> {
     if matches!(key.algorithm(), Algorithm::Rsa { .. }) {
-        *cached_rsa_hash
+        cached_rsa_hash
     } else {
         None
     }
@@ -111,14 +112,14 @@ fn rsa_hash_for_key(key: &PublicKey, cached_rsa_hash: &Option<HashAlg>) -> Optio
 const MAX_AGENT_KEYS: usize = 10;
 
 /// Try SSH agent authentication.
-async fn try_agent_auth(
-    session: &mut Handle<SshHandler>,
-    user: &str,
-) -> Result<()> {
-    let mut agent = AgentClient::connect_env().await
+async fn try_agent_auth(session: &mut Handle<SshHandler>, user: &str) -> Result<()> {
+    let mut agent = AgentClient::connect_env()
+        .await
         .context("Failed to connect to SSH agent (is SSH_AUTH_SOCK set?)")?;
 
-    let identities = agent.request_identities().await
+    let identities = agent
+        .request_identities()
+        .await
         .context("Failed to list keys from SSH agent")?;
 
     if identities.is_empty() {
@@ -133,18 +134,29 @@ async fn try_agent_auth(
     let cached_rsa_hash = query_rsa_hash(session).await;
 
     for (i, key) in identities.iter().take(try_count).enumerate() {
-        let hash_alg = rsa_hash_for_key(key, &cached_rsa_hash);
+        let hash_alg = rsa_hash_for_key(key, cached_rsa_hash);
         tracing::debug!(
             "Trying agent key {}/{}: {:?} (hash: {:?})",
-            i + 1, try_count, key.algorithm(), hash_alg,
+            i + 1,
+            try_count,
+            key.algorithm(),
+            hash_alg,
         );
-        match session.authenticate_publickey_with(user, key.clone(), hash_alg, &mut agent).await {
+        match session
+            .authenticate_publickey_with(user, key.clone(), hash_alg, &mut agent)
+            .await
+        {
             Ok(result) if result.success() => {
                 tracing::debug!("Authenticated via SSH agent (key {}/{})", i + 1, try_count);
                 return Ok(());
             }
             Ok(result) => {
-                tracing::debug!("Agent key {}/{} rejected by server: {:?}", i + 1, try_count, result);
+                tracing::debug!(
+                    "Agent key {}/{} rejected by server: {:?}",
+                    i + 1,
+                    try_count,
+                    result
+                );
             }
             Err(e) => {
                 tracing::debug!("Agent key {}/{} error: {}", i + 1, try_count, e);
@@ -153,8 +165,7 @@ async fn try_agent_auth(
     }
 
     Err(anyhow!(
-        "SSH agent has {} key(s) but none of the first {} were accepted",
-        total, try_count,
+        "SSH agent has {total} key(s) but none of the first {try_count} were accepted",
     ))
 }
 
@@ -177,7 +188,7 @@ async fn try_key_auth(
     };
 
     let cached_rsa_hash = query_rsa_hash(session).await;
-    let hash_alg = rsa_hash_for_key(key.public_key(), &cached_rsa_hash);
+    let hash_alg = rsa_hash_for_key(key.public_key(), cached_rsa_hash);
     let key_with_alg = PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg);
 
     match session.authenticate_publickey(user, key_with_alg).await {

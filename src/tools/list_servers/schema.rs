@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListServersInput {
-    #[schemars(description = "If true, also show configured servers that are not currently connected (default: true)")]
+    #[schemars(
+        description = "If true, also show configured servers that are not currently connected (default: true)"
+    )]
     pub include_configured: Option<bool>,
 }
 

@@ -16,13 +16,20 @@ fn creates_mcp_json_from_scratch() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let content = fs::read_to_string(dir.path().join(".mcp.json")).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
 
     assert_eq!(parsed["mcpServers"]["ssh-hub"]["command"], "ssh-hub");
-    assert_eq!(parsed["mcpServers"]["ssh-hub"]["args"], serde_json::json!([]));
+    assert_eq!(
+        parsed["mcpServers"]["ssh-hub"]["args"],
+        serde_json::json!([])
+    );
 }
 
 #[test]
@@ -90,7 +97,10 @@ fn overwrites_existing_ssh_hub_in_mcp_json() {
     let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
 
     assert_eq!(parsed["mcpServers"]["ssh-hub"]["command"], "ssh-hub");
-    assert_eq!(parsed["mcpServers"]["ssh-hub"]["args"], serde_json::json!([]));
+    assert_eq!(
+        parsed["mcpServers"]["ssh-hub"]["args"],
+        serde_json::json!([])
+    );
 }
 
 // ── Codex (.codex/config.toml) ──────────────────────────────────────
@@ -104,7 +114,11 @@ fn creates_codex_config_from_scratch() {
         .output()
         .unwrap();
 
-    assert!(output.status.success(), "stderr: {}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let content = fs::read_to_string(dir.path().join(".codex/config.toml")).unwrap();
     let parsed: toml::Table = content.parse().unwrap();
@@ -143,9 +157,19 @@ args = []
     let parsed: toml::Table = content.parse().unwrap();
 
     // ssh-hub added
-    assert_eq!(parsed["mcp_servers"]["ssh-hub"]["command"].as_str().unwrap(), "ssh-hub");
+    assert_eq!(
+        parsed["mcp_servers"]["ssh-hub"]["command"]
+            .as_str()
+            .unwrap(),
+        "ssh-hub"
+    );
     // other-server preserved
-    assert_eq!(parsed["mcp_servers"]["other-server"]["command"].as_str().unwrap(), "other");
+    assert_eq!(
+        parsed["mcp_servers"]["other-server"]["command"]
+            .as_str()
+            .unwrap(),
+        "other"
+    );
     // top-level key preserved
     assert_eq!(parsed["model"].as_str().unwrap(), "o3");
 }

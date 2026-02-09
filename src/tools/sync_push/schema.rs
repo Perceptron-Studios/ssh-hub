@@ -9,9 +9,13 @@ pub struct SyncPushInput {
     #[schemars(description = "Absolute path to a local file or directory to push")]
     pub local_path: String,
 
-    #[schemars(description = "Remote destination path. If omitted, mirrors the local path relative to the connection's base path")]
+    #[schemars(
+        description = "Remote destination path. If omitted, mirrors the local path relative to the connection's base path"
+    )]
     pub remote_path: Option<String>,
 
-    #[schemars(description = "Specific files to push, as relative paths within local_path. Only used when local_path is a directory. If omitted, pushes all files")]
-    pub files: Option<Vec<String>>,
+    #[schemars(
+        description = "Extra exclusion patterns (gitignore syntax). Applied on top of .gitignore rules. Example: [\"*.log\", \"tmp/\", \"dist\"]"
+    )]
+    pub exclude: Option<Vec<String>>,
 }

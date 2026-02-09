@@ -9,6 +9,8 @@ pub struct RemoteGlobInput {
     #[schemars(description = "The glob pattern to match files against")]
     pub pattern: String,
 
-    #[schemars(description = "The directory to search in. If not specified, uses the connection's base path")]
+    #[schemars(
+        description = "The directory to search in. If not specified, uses the connection's base path"
+    )]
     pub path: Option<String>,
 }

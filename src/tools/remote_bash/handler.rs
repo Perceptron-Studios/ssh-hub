@@ -2,8 +2,8 @@ use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::connection::SshConnection;
 use super::schema::{RemoteBashInput, RemoteBashOutput};
+use crate::connection::SshConnection;
 
 /// Default timeout for bash commands (2 minutes).
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
@@ -23,7 +23,10 @@ const SUMMARY_HEAD_LINES: usize = 150;
 const SUMMARY_TAIL_LINES: usize = 50;
 
 pub async fn handle(conn: Arc<SshConnection>, input: RemoteBashInput) -> String {
-    let timeout = input.timeout.unwrap_or(DEFAULT_TIMEOUT_MS).min(MAX_TIMEOUT_MS);
+    let timeout = input
+        .timeout
+        .unwrap_or(DEFAULT_TIMEOUT_MS)
+        .min(MAX_TIMEOUT_MS);
 
     match conn.exec(&input.command, Some(timeout)).await {
         Ok(result) => {
@@ -45,9 +48,9 @@ pub async fn handle(conn: Arc<SshConnection>, input: RemoteBashInput) -> String 
                 exit_code: result.exit_code,
             };
             serde_json::to_string_pretty(&output)
-                .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {}"}}"#, e))
+                .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {e}"}}"#))
         }
-        Err(e) => format!("Error: {}", e),
+        Err(e) => format!("Error: {e}"),
     }
 }
 
@@ -76,36 +79,36 @@ fn build_output_summary(stdout: &str, file_path: &Path) -> String {
     let total_bytes = stdout.len();
 
     let size_str = if total_bytes >= 1_000_000 {
-        format!("{:.1} MB", total_bytes as f64 / 1_000_000.0)
+        let tenths_mb = total_bytes / 100_000;
+        format!("{}.{} MB", tenths_mb / 10, tenths_mb % 10)
     } else {
-        format!("{:.0} KB", total_bytes as f64 / 1_000.0)
+        format!("{} KB", total_bytes / 1000)
     };
 
     let mut out = String::with_capacity(32 * 1024);
 
     let _ = writeln!(
         out,
-        "[Output too large for context ({}, {} lines)]",
-        size_str, total_lines,
+        "[Output too large for context ({size_str}, {total_lines} lines)]",
     );
     let _ = writeln!(out, "Full output saved to: {}", file_path.display());
 
     if total_lines > SUMMARY_HEAD_LINES + SUMMARY_TAIL_LINES {
-        let _ = writeln!(out, "\n--- First {} lines ---", SUMMARY_HEAD_LINES);
+        let _ = writeln!(out, "\n--- First {SUMMARY_HEAD_LINES} lines ---");
         for line in &lines[..SUMMARY_HEAD_LINES] {
-            let _ = writeln!(out, "{}", line);
+            let _ = writeln!(out, "{line}");
         }
 
         let omitted = total_lines - SUMMARY_HEAD_LINES - SUMMARY_TAIL_LINES;
-        let _ = writeln!(out, "\n... ({} lines omitted) ...", omitted);
+        let _ = writeln!(out, "\n... ({omitted} lines omitted) ...");
 
-        let _ = writeln!(out, "\n--- Last {} lines ---", SUMMARY_TAIL_LINES);
+        let _ = writeln!(out, "\n--- Last {SUMMARY_TAIL_LINES} lines ---");
         for line in &lines[total_lines - SUMMARY_TAIL_LINES..] {
-            let _ = writeln!(out, "{}", line);
+            let _ = writeln!(out, "{line}");
         }
     } else {
         // Few lines but large bytes (very long lines) — include all
-        let _ = write!(out, "\n{}", stdout);
+        let _ = write!(out, "\n{stdout}");
     }
 
     out
