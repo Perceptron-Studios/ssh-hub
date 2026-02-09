@@ -1,10 +1,8 @@
-# Troubleshooting
+# Server setup
 
-## Authentication failures
+Before adding a server to ssh-hub, the remote machine must have your **public SSH key** authorized. ssh-hub uses SSH keys only — no passwords.
 
-ssh-hub authenticates using SSH keys only (no passwords). When `ssh-hub add` fails with "failed authentication", the server is reachable but rejected all offered keys. The remote server must have your **public key** authorized before ssh-hub can connect.
-
-### Standard servers (authorized_keys)
+## Standard servers (authorized_keys)
 
 Copy your public key to the server using an existing access method (e.g., console, another SSH session):
 
@@ -17,11 +15,11 @@ echo "ssh-rsa AAAA..." >> ~/.ssh/authorized_keys
 chmod 600 ~/.ssh/authorized_keys
 ```
 
-### Cloud providers
+## Cloud providers
 
 Cloud VMs don't use `authorized_keys` by default — keys are managed through the provider's metadata service. When you replace a boot disk or create a fresh instance, SSH keys must be re-provisioned through the cloud CLI.
 
-#### GCP
+### GCP
 
 ```bash
 # Add your public key to the instance metadata, bound to a username
@@ -38,7 +36,7 @@ If the instance has OS Login enabled, disable it first so metadata keys take eff
 gcloud compute instances remove-metadata INSTANCE --zone=ZONE --keys=enable-oslogin
 ```
 
-#### AWS
+### AWS
 
 ```bash
 # Connect with the original key pair assigned at launch, then add your key
@@ -55,7 +53,7 @@ aws ec2-instance-connect send-ssh-public-key \
   --ssh-public-key file://~/.ssh/my_key.pub
 ```
 
-### Passphrase-protected keys
+## Passphrase-protected keys
 
 ssh-hub cannot decrypt passphrase-protected keys at runtime. Use the `-i` flag during `add` to load the key into your SSH agent:
 

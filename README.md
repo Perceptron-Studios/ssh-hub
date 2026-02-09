@@ -6,6 +6,7 @@ MCP server that gives AI coding agents full access to remote machines over SSH. 
 
 - **[Rust toolchain](https://rustup.rs/)** (1.70+)
 - **SSH agent** with loaded keys (`ssh-add`) or SSH key files (`~/.ssh/id_ed25519`, etc.)
+- **SSH key authorized on the remote server** — see [docs/server-setup.md](docs/server-setup.md)
 
 ## Install
 
@@ -111,10 +112,6 @@ host = "prod.example.com"
 user = "deploy"
 remote_path = "~"
 ```
-
-## Troubleshooting
-
-See [docs/troubleshooting.md](docs/troubleshooting.md) for common issues — SSH key setup for standard servers and cloud providers (GCP, AWS), passphrase-protected keys, and authentication failures.
 
 ## License
 
