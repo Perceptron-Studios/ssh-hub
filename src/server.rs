@@ -127,10 +127,16 @@ impl RemoteSessionServer {
     // ── Internals ─────────────────────────────────────────────────────
 
     /// Execute a closure with a named connection, auto-connecting from config if needed.
+    ///
+    /// After execution, checks if the connection died during the operation and
+    /// removes it from the pool so the next call triggers auto-reconnect.
     async fn with_connection(&self, server: &str, f: impl AsyncConnectionFn) -> String {
         // Fast path: already in the pool
         if let Some(conn) = self.pool.get(server).await {
-            return f.call(conn).await;
+            let conn_ref = Arc::clone(&conn);
+            let result = f.call(conn).await;
+            self.cleanup_if_dead(server, &conn_ref).await;
+            return result;
         }
 
         // Server not in pool — check config for auto-connect or produce an error.
@@ -159,10 +165,23 @@ impl RemoteSessionServer {
 
         // Auto-connect from config
         match self.try_auto_connect(server, params).await {
-            Ok(conn) => f.call(conn).await,
+            Ok(conn) => {
+                let conn_ref = Arc::clone(&conn);
+                let result = f.call(conn).await;
+                self.cleanup_if_dead(server, &conn_ref).await;
+                result
+            }
             Err(e) => {
                 format!("Error: server '{server}' is configured but auto-connect failed: {e}")
             }
+        }
+    }
+
+    /// Remove a connection from the pool if it died during an operation.
+    async fn cleanup_if_dead(&self, server: &str, conn: &SshConnection) {
+        if conn.is_closed().await {
+            tracing::debug!("Connection '{server}' died during operation, removing from pool");
+            self.pool.remove(server).await;
         }
     }
 

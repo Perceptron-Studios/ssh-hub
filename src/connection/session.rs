@@ -1,5 +1,7 @@
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use russh::client::{self, Handle};
@@ -23,6 +25,16 @@ const GLOB_TIMEOUT_MS: u64 = 30_000;
 
 /// Maximum number of files returned by a glob operation.
 const GLOB_MAX_RESULTS: usize = 1000;
+
+/// Interval between SSH keepalive probes.
+const KEEPALIVE_INTERVAL_SECS: u64 = 30;
+
+/// Number of missed keepalive responses before declaring the connection dead.
+const KEEPALIVE_MAX_FAILURES: usize = 3;
+
+/// Timeout for opening a new SSH channel. If `channel_open_session()` doesn't
+/// complete within this time, the connection is considered dead.
+const CHANNEL_OPEN_TIMEOUT_SECS: u64 = 10;
 
 /// Parameters needed to establish an SSH connection.
 /// Decoupled from CLI args — can be built from config, MCP tool input, or CLI.
@@ -113,6 +125,7 @@ struct ChannelOutput {
 pub struct SshConnection {
     session: Arc<Mutex<Handle<SshHandler>>>,
     params: ConnectionParams,
+    force_closed: Arc<AtomicBool>,
 }
 
 impl SshConnection {
@@ -131,7 +144,11 @@ impl SshConnection {
             params.remote_path,
         );
 
-        let config = Arc::new(client::Config::default());
+        let config = Arc::new(client::Config {
+            keepalive_interval: Some(Duration::from_secs(KEEPALIVE_INTERVAL_SECS)),
+            keepalive_max: KEEPALIVE_MAX_FAILURES,
+            ..client::Config::default()
+        });
         let handler = SshHandler::new(params.host.clone(), params.port);
 
         let mut session = client::connect(config, (params.host.as_str(), params.port), handler)
@@ -145,6 +162,7 @@ impl SshConnection {
         Ok(Self {
             session: Arc::new(Mutex::new(session)),
             params,
+            force_closed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -161,9 +179,21 @@ impl SshConnection {
     }
 
     /// Check whether the underlying SSH session has been closed.
+    ///
+    /// Returns `true` if the session was explicitly marked dead (e.g. channel
+    /// open timeout) or if russh reports the session as closed.
     pub async fn is_closed(&self) -> bool {
+        if self.force_closed.load(Ordering::Relaxed) {
+            return true;
+        }
         let session = self.session.lock().await;
         session.is_closed()
+    }
+
+    /// Mark this connection as dead. Subsequent `is_closed()` calls return
+    /// `true` without acquiring the session mutex.
+    pub fn mark_closed(&self) {
+        self.force_closed.store(true, Ordering::Relaxed);
     }
 
     /// Open a channel, execute a command, and collect all output with an optional timeout.
@@ -180,13 +210,29 @@ impl SshConnection {
         stdin_data: Option<&[u8]>,
         timeout_ms: Option<u64>,
     ) -> Result<ChannelOutput> {
-        // Lock ONLY for channel creation, then drop
-        let mut channel = {
-            let session = self.session.lock().await;
-            session
-                .channel_open_session()
-                .await
-                .context("Failed to open channel")?
+        // Lock ONLY for channel creation, then drop.
+        // Timeout prevents hanging on dead connections (e.g. after OS suspend).
+        let mut channel = if let Ok(result) =
+            tokio::time::timeout(Duration::from_secs(CHANNEL_OPEN_TIMEOUT_SECS), async {
+                let session = self.session.lock().await;
+                session
+                    .channel_open_session()
+                    .await
+                    .context("Failed to open channel")
+            })
+            .await
+        {
+            result?
+        } else {
+            tracing::warn!(
+                "Channel open timed out after {CHANNEL_OPEN_TIMEOUT_SECS}s, \
+                 connection likely dead"
+            );
+            self.mark_closed();
+            return Err(anyhow!(
+                "Timed out opening SSH channel ({CHANNEL_OPEN_TIMEOUT_SECS}s). \
+                 The connection may be dead — retry to auto-reconnect."
+            ));
         };
 
         let full_command = format!(
