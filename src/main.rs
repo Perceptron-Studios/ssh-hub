@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use tracing::level_filters::LevelFilter;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use ssh_hub::cli::Cli;
 use ssh_hub::server::RemoteSessionServer;
@@ -9,9 +8,9 @@ use ssh_hub::server_registry::ServerRegistry;
 
 fn init_logging(verbose: bool) {
     let filter = if verbose {
-        LevelFilter::DEBUG
+        EnvFilter::new("debug")
     } else {
-        LevelFilter::INFO
+        EnvFilter::new("info")
     };
 
     tracing_subscriber::registry()

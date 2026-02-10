@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use futures::future::join_all;
 use tokio::net::TcpStream;
 use tokio::sync::RwLock;
 use tokio::time::{timeout, Duration};
@@ -45,16 +46,10 @@ async fn apply_reachability(
         targets.extend(cfg.iter().map(|s| (s.host.as_str(), s.port)));
     }
 
-    let mut set = tokio::task::JoinSet::new();
-    for (i, (host, port)) in targets.iter().enumerate() {
-        let host = host.to_string();
-        let port = *port;
-        set.spawn(async move { (i, probe_reachability(&host, port).await) });
-    }
-    let mut results = vec![ReachabilityInfo::default(); targets.len()];
-    while let Some(Ok((i, info))) = set.join_next().await {
-        results[i] = info;
-    }
+    let probes = targets
+        .iter()
+        .map(|(host, port)| probe_reachability(host, *port));
+    let results = join_all(probes).await;
     let (conn_results, cfg_results) = results.split_at(connected_count);
 
     for (server, info) in connected.iter_mut().zip(conn_results) {
