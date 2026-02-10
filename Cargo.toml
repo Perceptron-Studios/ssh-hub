@@ -14,7 +14,7 @@ rmcp = { version = "0.13", features = ["server", "transport-io"] }
 russh = "0.50"
 
 # Async runtime
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt", "macros", "fs", "net", "time", "sync", "io-util", "io-std"] }
 
 # Serialization & schemas
 serde = { version = "1", features = ["derive"] }
@@ -38,6 +38,12 @@ tar = "0.4"
 flate2 = "1"
 dirs = "5"
 colored = "3.1.1"
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+opt-level = "z"
 
 [lib]
 name = "ssh_hub"

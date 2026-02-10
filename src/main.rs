@@ -19,7 +19,7 @@ fn init_logging(verbose: bool) {
         .init();
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     init_logging(cli.verbose);
