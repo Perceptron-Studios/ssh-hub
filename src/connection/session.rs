@@ -246,7 +246,8 @@ impl SshConnection {
             .await
             .context("Failed to execute command")?;
 
-        // Write stdin if provided
+        // Write stdin if provided, then always close stdin so interactive
+        // commands get EOF instead of hanging indefinitely.
         if let Some(data) = stdin_data {
             for chunk in data.chunks(STDIN_CHUNK_SIZE) {
                 channel
@@ -254,8 +255,8 @@ impl SshConnection {
                     .await
                     .context("Failed to write to stdin")?;
             }
-            channel.eof().await.context("Failed to send EOF")?;
         }
+        channel.eof().await.context("Failed to send EOF")?;
 
         // Collect output
         let mut stdout = Vec::new();

@@ -16,7 +16,10 @@ const SPINNER_COLOR: u8 = 208;
 /// Create an indented spinner for sub-operations under a header.
 #[must_use]
 pub fn start(message: impl Into<Cow<'static, str>>) -> ProgressBar {
-    create(&format!("{INDENT}{{spinner:.{SPINNER_COLOR}}} {{msg}}"), message)
+    create(
+        &format!("{INDENT}{{spinner:.{SPINNER_COLOR}}} {{msg}}"),
+        message,
+    )
 }
 
 /// Create a root-level spinner (no indent) for top-level operations.
