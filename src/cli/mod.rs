@@ -4,6 +4,7 @@ mod list;
 mod mcp_install;
 mod refresh;
 mod remove;
+mod spinner;
 mod update;
 
 use std::path::PathBuf;

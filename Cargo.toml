@@ -38,6 +38,7 @@ tar = "0.4"
 flate2 = "1"
 dirs = "5"
 colored = "3.1.1"
+indicatif = "0.17"
 
 [profile.release]
 lto = true

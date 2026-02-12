@@ -10,6 +10,7 @@ use crate::server_registry::{self, ServerRegistry};
 
 use super::params_from_config;
 use super::parse_connection_string;
+use super::spinner;
 
 /// Timeout for the connectivity test after adding a server (10 seconds).
 const CONNECTION_TEST_TIMEOUT_MS: u64 = 10_000;
@@ -93,11 +94,8 @@ fn add_key_to_agent(id: &Path) {
         id.display().to_string().underline(),
     );
 
-    let result = std::process::Command::new("ssh-add").arg(id).status();
-    let key_added = matches!(&result, Ok(s) if s.success());
-
-    match result {
-        Ok(_) if key_added => {
+    match std::process::Command::new("ssh-add").arg(id).status() {
+        Ok(s) if s.success() => {
             println!("  {} Key added to agent", "ok".green());
         }
         Ok(s) => {
@@ -105,17 +103,18 @@ fn add_key_to_agent(id: &Path) {
                 .code()
                 .map_or_else(|| "signal".to_string(), |c| c.to_string());
             println!("  {} ssh-add exited with code {code}", "warn".yellow());
+            println!(
+                "  You may need to run {} manually.",
+                format!("ssh-add {}", id.display()).dimmed(),
+            );
         }
-        Err(ref e) => {
+        Err(e) => {
             println!("  {} failed to run ssh-add: {e}", "warn".yellow());
+            println!(
+                "  You may need to run {} manually.",
+                format!("ssh-add {}", id.display()).dimmed(),
+            );
         }
-    }
-
-    if !key_added {
-        println!(
-            "  You may need to run {} manually.",
-            format!("ssh-add {}", id.display()).dimmed(),
-        );
     }
 }
 
@@ -127,7 +126,12 @@ async fn test_and_save(
 ) -> Result<()> {
     let params = params_from_config(name, &entry);
 
-    let Ok(conn) = connection::SshConnection::connect(params).await else {
+    let sp = spinner::start("Connecting...");
+    let conn = if let Ok(c) = connection::SshConnection::connect(params).await {
+        spinner::finish_ok(&sp, "Connected");
+        c
+    } else {
+        spinner::finish_failed(&sp, &format!("Server {name} failed authentication"));
         return prompt_save_on_failure(name, entry, config);
     };
 
@@ -139,14 +143,17 @@ async fn test_and_save(
     }
 
     // Collect system metadata while we have an open connection
+    let sp = spinner::start("Collecting system info...");
     match metadata::collect(&conn).await {
         Ok(meta) => {
+            spinner::finish_ok(&sp, "System info collected");
             if let Some(summary) = meta.summary_line() {
                 println!("  {} {}", "system:".dimmed(), summary);
             }
             entry.metadata = Some(meta);
         }
         Err(e) => {
+            spinner::finish_warn(&sp, "Metadata collection failed");
             tracing::debug!("Metadata collection failed during add: {e}");
         }
     }
@@ -167,13 +174,7 @@ fn prompt_save_on_failure(
     entry: server_registry::ServerEntry,
     config: &mut ServerRegistry,
 ) -> Result<()> {
-    println!(
-        "  {} Server {} failed authentication",
-        "failed".red(),
-        name.bold()
-    );
     println!();
-
     print!("  Save server config anyway? {}: ", "[y/N]".dimmed());
     std::io::stdout().flush()?;
     let mut save_choice = String::new();

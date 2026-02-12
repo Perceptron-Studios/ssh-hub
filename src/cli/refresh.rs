@@ -9,6 +9,7 @@ use crate::server_registry::{ServerEntry, ServerRegistry};
 use crate::{metadata, metadata::diff};
 
 use super::params_from_config;
+use super::spinner;
 
 #[derive(Default)]
 pub struct ConnectionOverrides {
@@ -97,12 +98,14 @@ async fn refresh_single(name: &str, config: &mut ServerRegistry, overrides: Conn
         (entry.metadata.clone(), params_from_config(name, entry))
     };
 
+    let sp = spinner::start("Connecting...");
     match SshConnection::connect(params).await {
         Ok(conn) => {
+            spinner::finish_ok(&sp, "Connected");
             collect_and_store(name, &conn, old_metadata.as_ref(), config).await;
         }
         Err(e) => {
-            println!("  {} Connection failed: {}", "failed".red(), e);
+            spinner::finish_failed(&sp, &format!("Connection failed: {e}"));
         }
     }
 }
@@ -113,23 +116,25 @@ async fn collect_and_store(
     old_metadata: Option<&SystemMetadata>,
     config: &mut ServerRegistry,
 ) {
+    let sp = spinner::start("Collecting system info...");
     let new_meta = match metadata::collect(conn).await {
         Ok(meta) => meta,
         Err(e) => {
-            println!("  {} Failed to collect metadata: {}", "warn".yellow(), e);
+            spinner::finish_warn(&sp, &format!("Failed to collect metadata: {e}"));
             return;
         }
     };
 
     match old_metadata.and_then(|old| diff(old, &new_meta)) {
         Some(changes) => {
-            println!("  {} Metadata changed: {}", "!".yellow().bold(), changes);
+            spinner::finish_ok(&sp, "Metadata updated");
+            println!("    {} {}", "!".yellow().bold(), changes);
         }
         None if old_metadata.is_some() => {
-            println!("  {} Metadata unchanged", "ok".green());
+            spinner::finish_ok(&sp, "Metadata unchanged");
         }
         None => {
-            println!("  {} Metadata collected", "ok".green());
+            spinner::finish_ok(&sp, "Metadata collected");
         }
     }
 

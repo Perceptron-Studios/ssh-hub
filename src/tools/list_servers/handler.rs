@@ -48,7 +48,10 @@ async fn enrich_with_config(
 
     for server in servers.iter_mut() {
         if let Some(entry) = cfg.get(&server.name) {
-            server.metadata = entry.metadata.as_ref().map(crate::metadata::SystemMetadata::without_timestamp);
+            server.metadata = entry
+                .metadata
+                .as_ref()
+                .map(crate::metadata::SystemMetadata::without_timestamp);
         }
     }
 
@@ -63,7 +66,10 @@ async fn enrich_with_config(
                 user: entry.user.clone(),
                 port: entry.port,
                 remote_path: entry.remote_path.clone(),
-                metadata: entry.metadata.as_ref().map(crate::metadata::SystemMetadata::without_timestamp),
+                metadata: entry
+                    .metadata
+                    .as_ref()
+                    .map(crate::metadata::SystemMetadata::without_timestamp),
                 connectivity: ConnectivityInfo {
                     status: ServerStatus::Configured,
                     reachable: false,
