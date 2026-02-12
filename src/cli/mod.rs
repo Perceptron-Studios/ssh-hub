@@ -1,21 +1,54 @@
 mod add;
+mod connection;
 mod list;
 mod mcp_install;
+mod refresh;
 mod remove;
 mod update;
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 
-use crate::connection::ConnectionParams;
-use crate::server_registry::ServerEntry;
+pub use connection::{params_from_config, parse_connection_string, ConnectionInfo};
 
 /// MCP server for remote SSH sessions
 #[derive(Parser, Debug)]
 #[command(name = "ssh-hub")]
 #[command(version, about)]
+#[command(long_about = "\
+MCP server that exposes remote file operations and shell execution over SSH.
+
+Configured servers are stored in ~/.config/ssh-hub/servers.toml. MCP tools \
+auto-connect on first use — no manual connection step needed.")]
+#[command(after_long_help = "\
+SSH KEY SETUP:
+    Your SSH public key must be authorized on the remote server:
+      ssh-copy-id -i ~/.ssh/id_ed25519.pub user@host
+
+    For cloud VMs (GCP, AWS), bind the key via the provider's metadata service.
+    See: https://github.com/Perceptron-Studios/ssh-hub/blob/main/docs/server-setup.md
+
+    The private key must be loaded in ssh-agent or available at ~/.ssh/id_*.
+    Auth order: explicit -i key → SSH agent (max 10 keys) → default key paths.
+
+AGENTS:
+    If an MCP connection fails or a server is unreachable, use these commands to
+    diagnose and fix the issue from your local shell:
+
+    ssh-hub refresh <server>
+      Re-collect system metadata. Also use this to update connection settings
+      when a server's IP changes (common in cloud/ephemeral environments):
+        ssh-hub refresh staging --host <new-ip>
+        ssh-hub refresh staging --port <new-port>
+
+    ssh-hub add <name> user@host:/path
+      Register a new server. Required before MCP tools can reach it.
+      Run `ssh-hub add --help` for connection string formats.
+
+    Other commands (list, remove, update, mcp-install) are self-explanatory
+    from the descriptions above.")]
 pub struct Cli {
     /// Enable verbose logging
     #[arg(short = 'v', long = "verbose", global = true)]
@@ -28,33 +61,60 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Add a server to the config (or reconfigure an existing one)
+    #[command(long_about = "\
+Add a server to the config (or reconfigure an existing one).
+
+Tests SSH connectivity and collects system metadata (OS, arch, package manager) \
+on success. Use -i for passphrase-protected keys — runs ssh-add to load the key \
+into the agent (prompts once for the passphrase).")]
+    #[command(after_long_help = "\
+CONNECTION FORMATS:
+    user@host              Port 22, path ~
+    user@host:/path        Port 22, explicit path
+    user@host:2222         Custom port, path ~
+    user@host:2222:/path   Custom port and path
+
+EXAMPLES:
+    ssh-hub add prod deploy@10.0.0.5:/var/www
+    ssh-hub add dev me@devbox
+    ssh-hub add gpu root@gpu-server:2222 -i ~/.ssh/gpu_key")]
     Add {
-        /// Server name (alias for config)
+        /// Server name (alias used in MCP tools and CLI commands)
         name: String,
 
-        /// SSH connection string: user@host:/path or user@host:port:/path
+        /// SSH connection string (see CONNECTION FORMATS below)
         connection: String,
 
-        /// SSH port override
+        /// Override SSH port from the connection string
         #[arg(short = 'p', long)]
         port: Option<u16>,
 
-        /// Path to SSH private key
+        /// Path to SSH private key (loaded into ssh-agent via ssh-add)
         #[arg(short = 'i', long)]
         identity: Option<PathBuf>,
     },
 
-    /// Remove a server from config
+    /// Remove a server from config. Active MCP sessions are not affected
     Remove {
         /// Server name to remove
         name: String,
     },
 
-    /// List all configured servers
+    /// List configured servers with connection details and system metadata
     List,
 
     /// Register ssh-hub as an MCP server in a project directory
     #[command(name = "mcp-install")]
+    #[command(long_about = "\
+Register ssh-hub as an MCP server in a project directory.
+
+Writes the config file so Claude Code (.mcp.json) and/or Codex (.codex/config.toml) \
+discover ssh-hub as an MCP server. Without --claude or --codex, configures both. \
+MCP tools auto-connect to configured servers on first use.")]
+    #[command(after_long_help = "\
+EXAMPLES:
+    ssh-hub mcp-install                           Both clients, current dir
+    ssh-hub mcp-install /path/to/project --claude Claude Code only")]
     McpInstall {
         /// Target project directory (default: current working directory)
         #[arg(default_value = ".")]
@@ -69,7 +129,49 @@ pub enum Command {
         codex: bool,
     },
 
-    /// Update ssh-hub to the latest release
+    /// Refresh server metadata and optionally update connection settings
+    #[command(long_about = "\
+Refresh server metadata and optionally update connection settings.
+
+Connects to the server and collects system metadata (OS, distro, arch, shell, \
+package manager). Diffs against previously stored values and reports changes.
+
+Connection setting overrides (--host, --port, etc.) are saved to config before \
+connecting — useful for ephemeral networks where server IPs change between sessions.")]
+    #[command(after_long_help = "\
+EXAMPLES:
+    ssh-hub refresh staging                       Refresh metadata
+    ssh-hub refresh staging --host 10.0.0.99      Update IP and refresh
+    ssh-hub refresh --all                         Refresh all servers")]
+    Refresh {
+        /// Server name to refresh
+        name: Option<String>,
+
+        /// Refresh all configured servers
+        #[arg(long)]
+        all: bool,
+
+        /// Update the stored SSH host before connecting
+        #[arg(long)]
+        host: Option<String>,
+
+        /// Update the stored SSH port before connecting
+        #[arg(short = 'p', long)]
+        port: Option<u16>,
+
+        /// Update the stored remote base path before connecting
+        #[arg(long)]
+        remote_path: Option<String>,
+
+        /// Update the stored SSH private key path before connecting
+        #[arg(short = 'i', long)]
+        identity: Option<PathBuf>,
+    },
+
+    /// Check for a newer release and install it via cargo install
+    #[command(long_about = "\
+Check GitHub for a newer release and install it via cargo install --git. \
+Use --check to preview the available version without installing.")]
     Update {
         /// Check for updates without installing
         #[arg(long)]
@@ -94,10 +196,7 @@ pub async fn run(command: Command) -> Result<()> {
 
         Command::Remove { name } => remove::run(&name),
 
-        Command::List => {
-            list::run();
-            Ok(())
-        }
+        Command::List => list::run(),
 
         Command::McpInstall {
             directory,
@@ -105,112 +204,23 @@ pub async fn run(command: Command) -> Result<()> {
             codex,
         } => mcp_install::run(&directory, claude, codex),
 
+        Command::Refresh {
+            name,
+            all,
+            host,
+            port,
+            remote_path,
+            identity,
+        } => {
+            let overrides = refresh::ConnectionOverrides {
+                host,
+                port,
+                remote_path,
+                identity,
+            };
+            refresh::run(name, all, overrides).await
+        }
+
         Command::Update { check } => update::run(check),
     }
-}
-
-// ── Connection string parsing ────────────────────────────────────────
-
-const DEFAULT_PORT: u16 = 22;
-const DEFAULT_REMOTE_PATH: &str = "~";
-
-/// Parsed SSH connection details
-#[derive(Debug, Clone)]
-pub struct ConnectionInfo {
-    pub user: String,
-    pub host: String,
-    pub port: u16,
-    pub remote_path: String,
-}
-
-/// Parse connection string format:
-///   user@host              — no path, default port
-///   user@host:/path        — with path, default port
-///   user@host:port         — no path, custom port
-///   user@host:port:/path   — with path, custom port
-///
-/// # Errors
-///
-/// Returns an error if the connection string is malformed (missing `@`,
-/// empty user/host, invalid port number, or invalid path).
-pub fn parse_connection_string(conn: &str, port_override: Option<u16>) -> Result<ConnectionInfo> {
-    // Split user@host from the rest (everything after the first ':')
-    let (user_host, rest) = match conn.split_once(':') {
-        Some(parts) => parts,
-        None => (conn, ""), // no colon: just user@host
-    };
-
-    let (user, host) = user_host
-        .split_once('@')
-        .ok_or_else(|| anyhow!("Invalid connection string: missing '@' in user@host"))?;
-
-    if user.is_empty() {
-        return Err(anyhow!("Invalid connection string: empty username"));
-    }
-    if host.is_empty() {
-        return Err(anyhow!("Invalid connection string: empty hostname"));
-    }
-
-    let (port, remote_path) = if rest.is_empty() {
-        // user@host
-        (DEFAULT_PORT, DEFAULT_REMOTE_PATH.to_string())
-    } else if rest.starts_with('/') {
-        // user@host:/path
-        (DEFAULT_PORT, rest.to_string())
-    } else if let Some((port_str, path)) = rest.split_once(':') {
-        // user@host:port:/path or user@host:port:
-        let port: u16 = port_str
-            .parse()
-            .map_err(|_| anyhow!("Invalid port number: {port_str}"))?;
-
-        if path.is_empty() {
-            (port, DEFAULT_REMOTE_PATH.to_string())
-        } else if path.starts_with('/') {
-            (port, path.to_string())
-        } else {
-            return Err(anyhow!(
-                "Invalid connection string: path must start with '/'"
-            ));
-        }
-    } else {
-        // user@host:port (no second colon, rest is just a number)
-        let port: u16 = rest.parse().map_err(|_| {
-            anyhow!("Invalid connection string: '{rest}' is not a port number or path")
-        })?;
-        (port, DEFAULT_REMOTE_PATH.to_string())
-    };
-
-    Ok(ConnectionInfo {
-        user: user.to_string(),
-        host: host.to_string(),
-        port: port_override.unwrap_or(port),
-        remote_path,
-    })
-}
-
-/// Build `ConnectionParams` from a `ServerEntry` (config file)
-#[must_use]
-pub fn params_from_config(name: &str, entry: &ServerEntry) -> ConnectionParams {
-    ConnectionParams {
-        host: entry.host.clone(),
-        user: entry.user.clone(),
-        port: entry.port,
-        remote_path: entry.remote_path.clone(),
-        identity: entry
-            .identity
-            .as_ref()
-            .map(|p| PathBuf::from(shellexpand_tilde(p))),
-        auth_method: entry.auth.clone(),
-        server_name: Some(name.to_string()),
-    }
-}
-
-/// Simple tilde expansion for paths
-fn shellexpand_tilde(path: &str) -> String {
-    if path.starts_with("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return format!("{}{}", home.display(), &path[1..]);
-        }
-    }
-    path.to_string()
 }

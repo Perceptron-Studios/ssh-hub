@@ -5,6 +5,7 @@ use anyhow::Result;
 use colored::Colorize;
 
 use crate::connection;
+use crate::metadata;
 use crate::server_registry::{self, ServerRegistry};
 
 use super::params_from_config;
@@ -19,7 +20,7 @@ pub async fn run(
     port: Option<u16>,
     identity: Option<PathBuf>,
 ) -> Result<()> {
-    let mut config = ServerRegistry::load().unwrap_or_default();
+    let mut config = ServerRegistry::load()?;
 
     if let Some(existing) = config.get(&name) {
         if !prompt_overwrite(&name, existing)? {
@@ -50,6 +51,7 @@ pub async fn run(
         remote_path: conn_info.remote_path,
         identity: identity.map(|p| p.to_string_lossy().to_string()),
         auth: server_registry::AuthMethod::Auto,
+        metadata: None,
     };
 
     test_and_save(&name, entry, &mut config).await
@@ -67,7 +69,7 @@ fn prompt_overwrite(name: &str, existing: &server_registry::ServerEntry) -> Resu
     println!("  {} {}", "user:".dimmed(), existing.user);
     println!("  {} {}", "port:".dimmed(), existing.port);
     println!("  {} {}", "path:".dimmed(), existing.remote_path);
-    println!("  {} {:?}", "auth:".dimmed(), existing.auth);
+    println!("  {} {}", "auth:".dimmed(), existing.auth);
     println!();
 
     print!("  Overwrite? {}: ", "[y/N]".dimmed());
@@ -92,23 +94,24 @@ fn add_key_to_agent(id: &Path) {
     );
 
     let result = std::process::Command::new("ssh-add").arg(id).status();
+    let key_added = matches!(&result, Ok(s) if s.success());
+
     match result {
-        Ok(s) if s.success() => {
+        Ok(_) if key_added => {
             println!("  {} Key added to agent", "ok".green());
         }
         Ok(s) => {
-            println!(
-                "  {} ssh-add exited with code {}",
-                "warn".yellow(),
-                s.code().unwrap_or(-1),
-            );
+            let code = s
+                .code()
+                .map_or_else(|| "signal".to_string(), |c| c.to_string());
+            println!("  {} ssh-add exited with code {code}", "warn".yellow());
         }
         Err(ref e) => {
-            println!("  {} failed to run ssh-add: {}", "warn".yellow(), e);
+            println!("  {} failed to run ssh-add: {e}", "warn".yellow());
         }
     }
 
-    if !matches!(result, Ok(s) if s.success()) {
+    if !key_added {
         println!(
             "  You may need to run {} manually.",
             format!("ssh-add {}", id.display()).dimmed(),
@@ -119,53 +122,79 @@ fn add_key_to_agent(id: &Path) {
 /// Test the SSH connection and save the entry to config.
 async fn test_and_save(
     name: &str,
-    entry: server_registry::ServerEntry,
+    mut entry: server_registry::ServerEntry,
     config: &mut ServerRegistry,
 ) -> Result<()> {
     let params = params_from_config(name, &entry);
 
-    if let Ok(conn) = connection::SshConnection::connect(params).await {
-        let _ = conn
-            .exec("echo 'ssh-hub test OK'", Some(CONNECTION_TEST_TIMEOUT_MS))
-            .await;
+    let Ok(conn) = connection::SshConnection::connect(params).await else {
+        return prompt_save_on_failure(name, entry, config);
+    };
 
+    if let Err(e) = conn
+        .exec("echo 'ssh-hub test OK'", Some(CONNECTION_TEST_TIMEOUT_MS))
+        .await
+    {
+        tracing::debug!("Connection test command failed: {e}");
+    }
+
+    // Collect system metadata while we have an open connection
+    match metadata::collect(&conn).await {
+        Ok(meta) => {
+            if let Some(summary) = meta.summary_line() {
+                println!("  {} {}", "system:".dimmed(), summary);
+            }
+            entry.metadata = Some(meta);
+        }
+        Err(e) => {
+            tracing::debug!("Metadata collection failed during add: {e}");
+        }
+    }
+
+    config.insert(name.to_string(), entry);
+    config.save()?;
+    println!(
+        "  {} Server {} is up and running",
+        "ok".green(),
+        name.bold()
+    );
+    Ok(())
+}
+
+/// Prompt the user to save config even though the connection failed.
+fn prompt_save_on_failure(
+    name: &str,
+    entry: server_registry::ServerEntry,
+    config: &mut ServerRegistry,
+) -> Result<()> {
+    println!(
+        "  {} Server {} failed authentication",
+        "failed".red(),
+        name.bold()
+    );
+    println!();
+
+    print!("  Save server config anyway? {}: ", "[y/N]".dimmed());
+    std::io::stdout().flush()?;
+    let mut save_choice = String::new();
+    std::io::stdin().read_line(&mut save_choice)?;
+
+    if save_choice.trim().eq_ignore_ascii_case("y") {
         config.insert(name.to_string(), entry);
         config.save()?;
         println!(
-            "  {} Server {} is up and running",
+            "  {} Saved to {}",
             "ok".green(),
-            name.bold()
+            ServerRegistry::config_path()?
+                .display()
+                .to_string()
+                .dimmed(),
         );
     } else {
         println!(
-            "  {} Server {} failed authentication",
-            "failed".red(),
-            name.bold()
+            "  {} Server not saved. Fix credentials and try again.",
+            "x".red(),
         );
-        println!();
-
-        print!("  Save server config anyway? {}: ", "[y/N]".dimmed());
-        std::io::stdout().flush()?;
-        let mut save_choice = String::new();
-        std::io::stdin().read_line(&mut save_choice)?;
-
-        if save_choice.trim().eq_ignore_ascii_case("y") {
-            config.insert(name.to_string(), entry);
-            config.save()?;
-            println!(
-                "  {} Saved to {}",
-                "ok".green(),
-                ServerRegistry::config_path()?
-                    .display()
-                    .to_string()
-                    .dimmed(),
-            );
-        } else {
-            println!(
-                "  {} Server not saved. Fix credentials and try again.",
-                "x".red(),
-            );
-        }
     }
 
     Ok(())

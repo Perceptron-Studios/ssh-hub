@@ -1,9 +1,11 @@
+use anyhow::Result;
 use colored::Colorize;
 
+use crate::metadata::SystemMetadata;
 use crate::server_registry::ServerRegistry;
 
-pub fn run() {
-    let config = ServerRegistry::load().unwrap_or_default();
+pub fn run() -> Result<()> {
+    let config = ServerRegistry::load()?;
 
     if config.servers.is_empty() {
         println!("{}", "No servers configured.".dimmed());
@@ -11,7 +13,7 @@ pub fn run() {
             "Run {} to add one.",
             "ssh-hub add <name> user@host:/path".bold(),
         );
-        return;
+        return Ok(());
     }
 
     for (name, entry) in &config.servers {
@@ -22,7 +24,15 @@ pub fn run() {
             entry.user.cyan(),
             entry.host.cyan(),
             entry.port.to_string().cyan(),
-            format!("(path: {}, auth: {:?})", entry.remote_path, entry.auth).dimmed(),
+            format!("(path: {}, auth: {})", entry.remote_path, entry.auth).dimmed(),
         );
+        if let Some(summary) = entry
+            .metadata
+            .as_ref()
+            .and_then(SystemMetadata::summary_line)
+        {
+            println!("    {}", summary.dimmed());
+        }
     }
+    Ok(())
 }

@@ -248,7 +248,9 @@ impl ServerHandler for RemoteSessionServer {
                  You already have local tools for local operations. Before using any remote tool, \
                  decide whether the target belongs to the local environment or a remote server.\n\
                  Workflow: list_servers to discover available servers -> use remote_*/sync_* tools (auto-connects configured servers).\n\
-                 All remote_* and sync_* tools require a 'server' parameter — the name of a configured server."
+                 All remote_* and sync_* tools require a 'server' parameter — the name of a configured server.\n\
+                 Troubleshooting: the `ssh-hub` CLI is available locally for server management \
+                 (add, remove, refresh metadata). Run `ssh-hub --help` for details."
                     .to_string(),
             ),
         }

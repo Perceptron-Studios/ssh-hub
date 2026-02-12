@@ -4,6 +4,11 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::metadata::SystemMetadata;
+
+const DEFAULT_SSH_PORT: u16 = 22;
+const DEFAULT_REMOTE_PATH: &str = "~";
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ServerRegistry {
     #[serde(default)]
@@ -21,6 +26,8 @@ pub struct ServerEntry {
     pub identity: Option<String>,
     #[serde(default)]
     pub auth: AuthMethod,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<SystemMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
@@ -32,12 +39,22 @@ pub enum AuthMethod {
     Key,
 }
 
+impl std::fmt::Display for AuthMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Auto => f.write_str("auto"),
+            Self::Agent => f.write_str("agent"),
+            Self::Key => f.write_str("key"),
+        }
+    }
+}
+
 fn default_port() -> u16 {
-    22
+    DEFAULT_SSH_PORT
 }
 
 fn default_remote_path() -> String {
-    "~".to_string()
+    DEFAULT_REMOTE_PATH.to_string()
 }
 
 impl ServerRegistry {
@@ -102,15 +119,18 @@ impl ServerRegistry {
         Ok(config_dir.join("ssh-hub").join("servers.toml"))
     }
 
+    /// Look up a server entry by its alias name.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&ServerEntry> {
         self.servers.get(name)
     }
 
+    /// Insert or replace a server entry.
     pub fn insert(&mut self, name: String, entry: ServerEntry) {
         self.servers.insert(name, entry);
     }
 
+    /// Remove a server entry, returning it if it existed.
     pub fn remove(&mut self, name: &str) -> Option<ServerEntry> {
         self.servers.remove(name)
     }

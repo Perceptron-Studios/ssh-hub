@@ -1,5 +1,6 @@
 pub mod cli;
 pub mod connection;
+pub mod metadata;
 pub mod server;
 pub mod server_registry;
 pub mod tools;
