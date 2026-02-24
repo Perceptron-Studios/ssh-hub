@@ -35,7 +35,6 @@ jobs:
 
       - name: Build release notes
         if: steps.check.outputs.exists == 'false'
-        id: notes
         run: |
           prev_tag=$(git tag --sort=-v:refname | head -1)
           if [ -n "$prev_tag" ]; then
@@ -43,19 +42,17 @@ jobs:
           else
             range="HEAD"
           fi
-          notes=$(git log "$range" --pretty=format:"- %s" --no-merges)
           {
-            echo "body<<EOF"
             echo "## What's changed"
             echo ""
-            echo "$notes"
+            git log "$range" --pretty=format:"- %s" --no-merges
+            echo ""
             echo ""
             echo "**Full changelog**: https://github.com/${{ github.repository }}/compare/${prev_tag}...${{ steps.version.outputs.tag }}"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          } > release-notes.md
 
       - name: Create release
         if: steps.check.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "${{ steps.version.outputs.tag }}" --notes "${{ steps.notes.outputs.body }}"
+        run: gh release create "${{ steps.version.outputs.tag }}" --notes-file release-notes.md
