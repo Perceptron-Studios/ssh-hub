@@ -17,6 +17,12 @@ use super::auth;
 /// Stdin is written to the SSH channel in chunks of this size.
 const STDIN_CHUNK_SIZE: usize = 32 * 1024;
 
+/// SSH extended data type for stderr (RFC 4254, section 5.2).
+const SSH_EXTENDED_DATA_STDERR: u32 = 1;
+
+/// Exit code used when the server closes the channel without sending an exit status.
+const EXIT_CODE_NO_STATUS: i32 = -1;
+
 /// Default timeout for single-file read/write operations (1 minute).
 const FILE_IO_TIMEOUT_MS: u64 = 60_000;
 
@@ -78,7 +84,7 @@ impl client::Handler for SshHandler {
             }
             Ok(false) => {
                 // TOFU: first time seeing this host — learn the key
-                tracing::info!(
+                tracing::debug!(
                     "New host key for {}:{}, adding to known_hosts",
                     self.host,
                     self.port
@@ -212,8 +218,8 @@ impl SshConnection {
     ) -> Result<ChannelOutput> {
         // Lock ONLY for channel creation, then drop.
         // Timeout prevents hanging on dead connections (e.g. after OS suspend).
-        let mut channel = if let Ok(result) =
-            tokio::time::timeout(Duration::from_secs(CHANNEL_OPEN_TIMEOUT_SECS), async {
+        let mut channel =
+            match tokio::time::timeout(Duration::from_secs(CHANNEL_OPEN_TIMEOUT_SECS), async {
                 let session = self.session.lock().await;
                 session
                     .channel_open_session()
@@ -221,19 +227,26 @@ impl SshConnection {
                     .context("Failed to open channel")
             })
             .await
-        {
-            result?
-        } else {
-            tracing::warn!(
-                "Channel open timed out after {CHANNEL_OPEN_TIMEOUT_SECS}s, \
-                 connection likely dead"
-            );
-            self.mark_closed();
-            return Err(anyhow!(
-                "Timed out opening SSH channel ({CHANNEL_OPEN_TIMEOUT_SECS}s). \
-                 The connection may be dead — retry to auto-reconnect."
-            ));
-        };
+            {
+                Ok(Ok(ch)) => ch,
+                Ok(Err(e)) => {
+                    // channel_open_session returned an error — connection is unusable.
+                    tracing::warn!("Channel open failed: {e}");
+                    self.mark_closed();
+                    return Err(e.context("Connection unusable — retry to auto-reconnect"));
+                }
+                Err(_elapsed) => {
+                    tracing::warn!(
+                        "Channel open timed out after {CHANNEL_OPEN_TIMEOUT_SECS}s, \
+                     connection likely dead"
+                    );
+                    self.mark_closed();
+                    return Err(anyhow!(
+                        "Timed out opening SSH channel ({CHANNEL_OPEN_TIMEOUT_SECS}s). \
+                     The connection may be dead — retry to auto-reconnect."
+                    ));
+                }
+            };
 
         let full_command = format!(
             "cd {} && {}",
@@ -241,63 +254,71 @@ impl SshConnection {
             command,
         );
 
-        channel
-            .exec(true, full_command)
-            .await
-            .context("Failed to execute command")?;
+        if let Err(e) = channel.exec(true, full_command).await {
+            // exec failure after opening a channel means the connection is broken.
+            self.mark_closed();
+            return Err(anyhow!(e).context("Connection unusable — retry to auto-reconnect"));
+        }
 
         // Write stdin if provided, then always close stdin so interactive
         // commands get EOF instead of hanging indefinitely.
         if let Some(data) = stdin_data {
             for chunk in data.chunks(STDIN_CHUNK_SIZE) {
-                channel
-                    .data(chunk)
-                    .await
-                    .context("Failed to write to stdin")?;
+                if let Err(e) = channel.data(chunk).await {
+                    self.mark_closed();
+                    return Err(anyhow!(e).context("Connection unusable — retry to auto-reconnect"));
+                }
             }
         }
-        channel.eof().await.context("Failed to send EOF")?;
+        if let Err(e) = channel.eof().await {
+            self.mark_closed();
+            return Err(anyhow!(e).context("Connection unusable — retry to auto-reconnect"));
+        }
 
         // Collect output
+        let output = if let Some(ms) = timeout_ms {
+            tokio::time::timeout(
+                Duration::from_millis(ms),
+                Self::collect_channel_output(&mut channel),
+            )
+            .await
+            .context("Command timed out")?
+        } else {
+            Self::collect_channel_output(&mut channel).await
+        };
+
+        Ok(output)
+    }
+
+    /// Drain all output from a channel until it closes.
+    async fn collect_channel_output(channel: &mut russh::Channel<client::Msg>) -> ChannelOutput {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut exit_code = None;
 
-        let read_loop = async {
-            loop {
-                match channel.wait().await {
-                    Some(ChannelMsg::Data { data }) => {
-                        stdout.extend_from_slice(&data);
-                    }
-                    Some(ChannelMsg::ExtendedData { data, ext }) => {
-                        if ext == 1 {
-                            stderr.extend_from_slice(&data);
-                        }
-                    }
-                    Some(ChannelMsg::ExitStatus { exit_status }) => {
-                        exit_code = Some(exit_status.cast_signed());
-                    }
-                    None => break,
-                    _ => {}
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::Data { data }) => {
+                    stdout.extend_from_slice(&data);
                 }
+                Some(ChannelMsg::ExtendedData { data, ext }) => {
+                    if ext == SSH_EXTENDED_DATA_STDERR {
+                        stderr.extend_from_slice(&data);
+                    }
+                }
+                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                    exit_code = Some(exit_status.cast_signed());
+                }
+                None => break,
+                _ => {}
             }
-            Ok::<_, anyhow::Error>(())
-        };
-
-        if let Some(ms) = timeout_ms {
-            let timeout = tokio::time::Duration::from_millis(ms);
-            tokio::time::timeout(timeout, read_loop)
-                .await
-                .context("Command timed out")??;
-        } else {
-            read_loop.await?;
         }
 
-        Ok(ChannelOutput {
+        ChannelOutput {
             stdout,
             stderr,
-            exit_code: exit_code.unwrap_or(-1),
-        })
+            exit_code: exit_code.unwrap_or(EXIT_CODE_NO_STATUS),
+        }
     }
 
     /// Execute a command on the remote machine.
@@ -403,6 +424,8 @@ impl SshConnection {
             )
             .await?;
 
+        // find piped through head can return non-zero (SIGPIPE) even on success,
+        // so only treat it as an error if stderr has content.
         if result.exit_code != 0 && !result.stderr.is_empty() {
             return Err(anyhow!("Glob failed: {}", result.stderr));
         }

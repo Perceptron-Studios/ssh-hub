@@ -86,6 +86,9 @@ fn prompt_overwrite(name: &str, existing: &server_registry::ServerEntry) -> Resu
 }
 
 /// Add an identity key to ssh-agent, printing status.
+///
+/// Pipes stdout/stderr so subprocess output can be reprinted with indentation.
+/// The passphrase prompt still works because `ssh-add` reads from `/dev/tty`.
 fn add_key_to_agent(id: &Path) {
     println!();
     println!(
@@ -94,19 +97,35 @@ fn add_key_to_agent(id: &Path) {
         id.display().to_string().underline(),
     );
 
-    match std::process::Command::new("ssh-add").arg(id).status() {
-        Ok(s) if s.success() => {
-            println!("  {} Key added to agent", "ok".green());
-        }
-        Ok(s) => {
-            let code = s
-                .code()
-                .map_or_else(|| "signal".to_string(), |c| c.to_string());
-            println!("  {} ssh-add exited with code {code}", "warn".yellow());
-            println!(
-                "  You may need to run {} manually.",
-                format!("ssh-add {}", id.display()).dimmed(),
-            );
+    let result = std::process::Command::new("ssh-add")
+        .arg(id)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .output();
+
+    match result {
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            for line in stderr.lines().chain(stdout.lines()) {
+                if !line.is_empty() {
+                    println!("  {line}");
+                }
+            }
+
+            if output.status.success() {
+                println!("  {} Key added to agent", "ok".green());
+            } else {
+                let code = output
+                    .status
+                    .code()
+                    .map_or_else(|| "signal".to_string(), |c| c.to_string());
+                println!("  {} ssh-add exited with code {code}", "warn".yellow());
+                println!(
+                    "  You may need to run {} manually.",
+                    format!("ssh-add {}", id.display()).dimmed(),
+                );
+            }
         }
         Err(e) => {
             println!("  {} failed to run ssh-add: {e}", "warn".yellow());
@@ -126,9 +145,9 @@ async fn test_and_save(
 ) -> Result<()> {
     let params = params_from_config(name, &entry);
 
-    let sp = spinner::start("Connecting...");
+    let sp = spinner::start("Establishing connection...");
     let conn = if let Ok(c) = connection::SshConnection::connect(params).await {
-        spinner::finish_ok(&sp, "Connected");
+        spinner::finish_ok(&sp, "Connection established");
         c
     } else {
         spinner::finish_failed(&sp, &format!("Server {name} failed authentication"));
@@ -143,28 +162,24 @@ async fn test_and_save(
     }
 
     // Collect system metadata while we have an open connection
-    let sp = spinner::start("Collecting system info...");
+    let sp = spinner::start("Extracting system metadata...");
     match metadata::collect(&conn).await {
         Ok(meta) => {
-            spinner::finish_ok(&sp, "System info collected");
+            spinner::finish_ok(&sp, "System metadata extracted");
             if let Some(summary) = meta.summary_line() {
                 println!("  {} {}", "system:".dimmed(), summary);
             }
             entry.metadata = Some(meta);
         }
         Err(e) => {
-            spinner::finish_warn(&sp, "Metadata collection failed");
-            tracing::debug!("Metadata collection failed during add: {e}");
+            spinner::finish_warn(&sp, "Metadata extraction failed");
+            tracing::debug!("Metadata extraction failed during add: {e}");
         }
     }
 
     config.insert(name.to_string(), entry);
     config.save()?;
-    println!(
-        "  {} Server {} is up and running",
-        "ok".green(),
-        name.bold()
-    );
+    println!("{} Server {} is up and running", "ok".green(), name.bold());
     Ok(())
 }
 

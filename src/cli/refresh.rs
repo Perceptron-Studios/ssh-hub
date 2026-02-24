@@ -98,10 +98,10 @@ async fn refresh_single(name: &str, config: &mut ServerRegistry, overrides: Conn
         (entry.metadata.clone(), params_from_config(name, entry))
     };
 
-    let sp = spinner::start("Connecting...");
+    let sp = spinner::start("Establishing connection...");
     match SshConnection::connect(params).await {
         Ok(conn) => {
-            spinner::finish_ok(&sp, "Connected");
+            spinner::finish_ok(&sp, "Connection established");
             collect_and_store(name, &conn, old_metadata.as_ref(), config).await;
         }
         Err(e) => {
@@ -116,11 +116,11 @@ async fn collect_and_store(
     old_metadata: Option<&SystemMetadata>,
     config: &mut ServerRegistry,
 ) {
-    let sp = spinner::start("Collecting system info...");
+    let sp = spinner::start("Extracting system metadata...");
     let new_meta = match metadata::collect(conn).await {
         Ok(meta) => meta,
         Err(e) => {
-            spinner::finish_warn(&sp, &format!("Failed to collect metadata: {e}"));
+            spinner::finish_warn(&sp, &format!("Metadata extraction failed: {e}"));
             return;
         }
     };
@@ -134,7 +134,7 @@ async fn collect_and_store(
             spinner::finish_ok(&sp, "Metadata unchanged");
         }
         None => {
-            spinner::finish_ok(&sp, "Metadata collected");
+            spinner::finish_ok(&sp, "Metadata extracted");
         }
     }
 
