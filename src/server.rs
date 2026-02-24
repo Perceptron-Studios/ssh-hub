@@ -46,7 +46,7 @@ impl RemoteSessionServer {
     // ── Remote Tools ──────────────────────────────────────────────────
 
     #[tool(
-        description = "Execute a shell command on a remote server. Commands run from the connection's base path. Use this for git operations, build tools, process management, and any other shell task on the remote machine."
+        description = "Execute a shell command on a remote server. Commands run from the connection's base path. Use this for git operations, build tools, process management, and any other shell task on the remote machine. Set run_in_background=true for long-running commands — returns immediately with a PID and log file path instead of waiting for completion."
     )]
     async fn remote_bash(&self, Parameters(input): Parameters<tools::RemoteBashInput>) -> String {
         let server = input.server.clone();
