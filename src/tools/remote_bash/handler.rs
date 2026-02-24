@@ -49,9 +49,12 @@ pub async fn handle(conn: Arc<SshConnection>, input: RemoteBashInput) -> String 
 async fn handle_background(conn: Arc<SshConnection>, input: RemoteBashInput) -> String {
     let log_file = format!("/tmp/ssh-hub-bg-{}.log", timestamp_suffix());
 
-    // nohup + redirect + background, then echo the PID
+    // nohup + redirect stdout/stderr + close stdin + background, then echo PID.
+    // `< /dev/null` is critical: without it the backgrounded process inherits
+    // the SSH channel's stdin FD, keeping the channel open and preventing
+    // the read loop from completing.
     let wrapped = format!(
-        "nohup sh -c {} > {} 2>&1 & echo $!",
+        "nohup sh -c {} > {} 2>&1 < /dev/null & echo $!",
         shell_escape(&input.command),
         shell_escape(&log_file),
     );
