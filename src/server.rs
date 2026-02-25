@@ -130,25 +130,36 @@ impl RemoteSessionServer {
     ///
     /// After execution, checks if the connection died during the operation and
     /// removes it from the pool so the next call triggers auto-reconnect.
+    ///
+    /// A per-server lock serializes connection establishment so concurrent tool
+    /// calls don't race to create duplicate SSH connections.
     async fn with_connection(&self, server: &str, f: impl AsyncConnectionFn) -> String {
-        // Fast path: already in the pool
+        let conn = match self.resolve_connection(server).await {
+            Ok(conn) => conn,
+            Err(msg) => return msg,
+        };
+        let conn_ref = Arc::clone(&conn);
+        let result = f.call(conn).await;
+        self.cleanup_if_dead(server, &conn_ref).await;
+        result
+    }
+
+    /// Resolve a connection for the given server: return from pool, or
+    /// auto-connect from config under a per-server lock.
+    async fn resolve_connection(&self, server: &str) -> Result<Arc<SshConnection>, String> {
+        // Fast path: already in the pool — no lock needed.
         if let Some(conn) = self.pool.get(server).await {
-            let conn_ref = Arc::clone(&conn);
-            let result = f.call(conn).await;
-            self.cleanup_if_dead(server, &conn_ref).await;
-            return result;
+            return Ok(conn);
         }
 
         // Server not in pool — check config for auto-connect or produce an error.
-        // Single lock acquisition handles both the auto-connect lookup and the
-        // "not found" error message listing configured servers.
         let params = {
             let cfg = self.config.read().await;
             if let Some(entry) = cfg.get(server) {
                 params_from_config(server, entry)
             } else {
                 let names: Vec<&str> = cfg.servers.keys().map(String::as_str).collect();
-                return if names.is_empty() {
+                return Err(if names.is_empty() {
                     format!(
                         "Error: server '{server}' not found. No servers are configured. \
                          Add servers via 'ssh-hub add <name> <connection>'."
@@ -159,29 +170,30 @@ impl RemoteSessionServer {
                         server,
                         names.join(", ")
                     )
-                };
+                });
             }
         };
 
-        // Auto-connect from config
-        match self.try_auto_connect(server, params).await {
-            Ok(conn) => {
-                let conn_ref = Arc::clone(&conn);
-                let result = f.call(conn).await;
-                self.cleanup_if_dead(server, &conn_ref).await;
-                result
-            }
-            Err(e) => {
-                format!("Error: server '{server}' is configured but auto-connect failed: {e}")
-            }
+        // Acquire per-server lock to prevent concurrent connect races.
+        let lock = self.pool.connect_lock(server).await;
+        let _guard = lock.lock().await;
+
+        // Re-check pool — another task may have connected while we waited.
+        if let Some(conn) = self.pool.get(server).await {
+            return Ok(conn);
         }
+
+        // Auto-connect from config
+        self.try_auto_connect(server, params).await.map_err(|e| {
+            format!("Error: server '{server}' is configured but auto-connect failed: {e}")
+        })
     }
 
     /// Remove a connection from the pool if it died during an operation.
     async fn cleanup_if_dead(&self, server: &str, conn: &SshConnection) {
         if conn.is_closed().await {
             tracing::debug!("Connection '{server}' died during operation, removing from pool");
-            self.pool.remove(server).await;
+            drop(self.pool.remove(server).await);
         }
     }
 
@@ -192,15 +204,8 @@ impl RemoteSessionServer {
         params: ConnectionParams,
     ) -> Result<Arc<SshConnection>> {
         tracing::info!("Auto-connecting to configured server '{}'", server);
-
         let conn = SshConnection::connect(params).await?;
-        self.pool.insert(server.to_string(), conn).await;
-
-        // pool.insert wraps in Arc; retrieve it so the caller gets the pooled Arc
-        self.pool
-            .get(server)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Connection lost immediately after insertion"))
+        Ok(self.pool.insert(server.to_string(), conn).await)
     }
 
     /// Run the MCP server on stdio.

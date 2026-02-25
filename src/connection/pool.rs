@@ -1,14 +1,21 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use super::session::ConnectionParams;
 use super::SshConnection;
 
 /// Thread-safe pool of named SSH connections.
 /// Uses `RwLock` for concurrent reads (tool execution) and exclusive writes (connect/disconnect).
+///
+/// Per-server connect locks prevent concurrent tool calls from racing to create
+/// duplicate connections to the same server. The lock is held only during the
+/// "check pool → connect → insert" window — once a connection is pooled, all
+/// callers proceed without blocking.
 pub struct ConnectionPool {
     connections: RwLock<HashMap<String, Arc<SshConnection>>>,
+    /// Per-server locks that serialize connection establishment.
+    connect_locks: RwLock<HashMap<String, Arc<Mutex<()>>>>,
 }
 
 impl Default for ConnectionPool {
@@ -22,6 +29,7 @@ impl ConnectionPool {
     pub fn new() -> Self {
         Self {
             connections: RwLock::new(HashMap::new()),
+            connect_locks: RwLock::new(HashMap::new()),
         }
     }
 
@@ -37,7 +45,13 @@ impl ConnectionPool {
             if c.is_closed().await {
                 tracing::debug!("Connection '{}' is closed, removing from pool", name);
                 let mut guard = self.connections.write().await;
-                guard.remove(name);
+                // Only evict if this is still the same connection object —
+                // another task may have already replaced it with a fresh one.
+                if let Some(current) = guard.get(name) {
+                    if Arc::ptr_eq(current, c) {
+                        guard.remove(name);
+                    }
+                }
                 return None;
             }
         }
@@ -45,10 +59,12 @@ impl ConnectionPool {
         conn
     }
 
-    /// Insert a new connection. Returns the previous connection if one existed with this name.
-    pub async fn insert(&self, name: String, conn: SshConnection) -> Option<Arc<SshConnection>> {
+    /// Insert a new connection into the pool, returning the `Arc` handle to it.
+    pub async fn insert(&self, name: String, conn: SshConnection) -> Arc<SshConnection> {
+        let arc = Arc::new(conn);
         let mut guard = self.connections.write().await;
-        guard.insert(name, Arc::new(conn))
+        guard.insert(name, Arc::clone(&arc));
+        arc
     }
 
     /// Remove and return a connection by name.
@@ -76,5 +92,20 @@ impl ConnectionPool {
     pub async fn contains(&self, name: &str) -> bool {
         let guard = self.connections.read().await;
         guard.contains_key(name)
+    }
+
+    /// Get the per-server connect lock. Callers hold this while establishing
+    /// a new connection to prevent duplicate connections from concurrent calls.
+    pub async fn connect_lock(&self, name: &str) -> Arc<Mutex<()>> {
+        // Fast path: lock already exists
+        {
+            let guard = self.connect_locks.read().await;
+            if let Some(lock) = guard.get(name) {
+                return Arc::clone(lock);
+            }
+        }
+        // Slow path: create the lock
+        let mut guard = self.connect_locks.write().await;
+        Arc::clone(guard.entry(name.to_string()).or_default())
     }
 }
