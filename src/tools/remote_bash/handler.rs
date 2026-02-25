@@ -35,8 +35,20 @@ const TENTHS_MB_DIVISOR: usize = 100_000;
 /// Execute a bash command on the remote server.
 ///
 /// Dispatches to foreground or background execution based on `input.run_in_background`.
+/// Rejects commands that attempt shell-level backgrounding without using the
+/// `run_in_background` flag, since those break the SSH channel.
 pub async fn handle(conn: Arc<SshConnection>, input: RemoteBashInput) -> String {
     let run_in_background = input.run_in_background.unwrap_or(false);
+
+    if !run_in_background {
+        if let Some(reason) = detect_background_pattern(&input.command) {
+            return format!(
+                "Error: command appears to use shell-level backgrounding ({reason}). \
+                 This will hang the SSH channel. Use the `run_in_background` parameter \
+                 instead and pass the raw command without nohup/setsid/& wrappers."
+            );
+        }
+    }
 
     if run_in_background {
         handle_background(conn, input).await
@@ -49,14 +61,26 @@ pub async fn handle(conn: Arc<SshConnection>, input: RemoteBashInput) -> String 
 async fn handle_background(conn: Arc<SshConnection>, input: RemoteBashInput) -> String {
     let log_file = format!("/tmp/ssh-hub-bg-{}.log", timestamp_suffix());
 
-    // nohup + redirect stdout/stderr + close stdin + background, then echo PID.
-    // `< /dev/null` is critical: without it the backgrounded process inherits
-    // the SSH channel's stdin FD, keeping the channel open and preventing
-    // the read loop from completing.
+    // Detach the background process from the SSH session so the channel
+    // closes immediately after echoing the PID.
+    //
+    // `setsid` (Linux, part of util-linux) creates a new session, fully
+    // detaching from the SSH session's process group. Without it, sshd
+    // keeps the channel open until ALL processes in the session exit —
+    // even when stdout/stderr are redirected away from the pipe.
+    //
+    // Falls back to `nohup ... &` on systems without `setsid` (macOS, BSD).
+    // The fallback works for most cases (FD redirection breaks the pipe
+    // connection) but can fail with long-running processes that inherit
+    // session membership.
+    let cmd = shell_escape(&input.command);
+    let log = shell_escape(&log_file);
     let wrapped = format!(
-        "nohup sh -c {} > {} 2>&1 < /dev/null & echo $!",
-        shell_escape(&input.command),
-        shell_escape(&log_file),
+        "if command -v setsid >/dev/null 2>&1; then \
+             setsid sh -c {cmd} > {log} 2>&1 < /dev/null & \
+         else \
+             nohup sh -c {cmd} > {log} 2>&1 < /dev/null & \
+         fi; echo $!",
     );
 
     let result = match conn.exec(&wrapped, Some(BACKGROUND_TIMEOUT_MS)).await {
@@ -182,4 +206,52 @@ fn truncate_inline(stdout: &str) -> String {
     let mut s = stdout[..end].to_string();
     s.push_str("\n\n[Output truncated — failed to save to disk]");
     s
+}
+
+/// Detect shell-level backgrounding patterns that would hang the SSH channel.
+///
+/// Returns a short description of the detected pattern, or `None` if the
+/// command looks like a normal foreground command.
+#[must_use]
+pub fn detect_background_pattern(command: &str) -> Option<&'static str> {
+    let trimmed = command.trim();
+
+    // Check if a keyword appears in command position (start of command or
+    // after a shell operator like &&, ||, ;) rather than as an argument.
+    let in_command_position = |keyword: &str| -> bool {
+        if trimmed.starts_with(keyword) && trimmed[keyword.len()..].starts_with(' ') {
+            return true;
+        }
+        for sep in ["&& ", "|| ", "; "] {
+            for part in trimmed.split(sep) {
+                let part = part.trim();
+                if part.starts_with(keyword) && part[keyword.len()..].starts_with(' ') {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
+    if in_command_position("nohup") {
+        return Some("nohup");
+    }
+
+    if in_command_position("setsid") {
+        return Some("setsid");
+    }
+
+    // Trailing & (but not &&) — strip common suffixes like `echo $!` and `disown`
+    let stripped = trimmed
+        .trim_end()
+        .trim_end_matches("echo $!")
+        .trim_end_matches(';')
+        .trim_end_matches("disown")
+        .trim_end_matches(';')
+        .trim_end();
+    if stripped.ends_with('&') && !stripped.ends_with("&&") {
+        return Some("trailing &");
+    }
+
+    None
 }
