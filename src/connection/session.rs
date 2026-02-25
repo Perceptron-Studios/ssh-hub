@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use russh::client::{self, Handle};
 use russh::keys::PublicKey;
-use russh::ChannelMsg;
+use russh::{ChannelMsg, Disconnect};
 use tokio::sync::Mutex;
 
 use crate::server_registry::AuthMethod;
@@ -41,6 +41,15 @@ const KEEPALIVE_MAX_FAILURES: usize = 3;
 /// Timeout for opening a new SSH channel. If `channel_open_session()` doesn't
 /// complete within this time, the connection is considered dead.
 const CHANNEL_OPEN_TIMEOUT_SECS: u64 = 10;
+
+/// Time budget for draining buffered data from a timed-out channel to
+/// unblock the session loop before sending `SSH_MSG_CHANNEL_CLOSE`.
+const CHANNEL_DRAIN_TIMEOUT_SECS: u64 = 4;
+
+/// Aggressive timeout for sending `SSH_MSG_DISCONNECT` when the session is
+/// likely saturated. If this fails, we rely on `mark_closed()` + eventual
+/// TCP teardown when the last `Arc<SshConnection>` is dropped.
+const DISCONNECT_TIMEOUT_SECS: u64 = 2;
 
 /// Parameters needed to establish an SSH connection.
 /// Decoupled from CLI args — can be built from config, MCP tool input, or CLI.
@@ -277,17 +286,108 @@ impl SshConnection {
 
         // Collect output
         let output = if let Some(ms) = timeout_ms {
-            tokio::time::timeout(
+            match tokio::time::timeout(
                 Duration::from_millis(ms),
                 Self::collect_channel_output(&mut channel),
             )
             .await
-            .context("Command timed out")?
+            {
+                Ok(output) => output,
+                Err(_elapsed) => {
+                    self.cleanup_timed_out_channel(&mut channel).await;
+                    return Err(anyhow!("Command timed out"));
+                }
+            }
         } else {
             Self::collect_channel_output(&mut channel).await
         };
 
         Ok(output)
+    }
+
+    /// Clean up a channel after a command timeout.
+    ///
+    /// Two-phase approach to prevent head-of-line blocking:
+    ///
+    /// 1. **Drain** — read and discard buffered data. This frees the channel's
+    ///    bounded internal buffer, which unblocks russh's session loop (it may
+    ///    be stuck trying to deliver data into the full buffer). While we
+    ///    drain, russh sends `WINDOW_ADJUST` back to the remote, keeping SSH
+    ///    flow control alive.
+    ///
+    /// 2. **Close** — send `SSH_MSG_CHANNEL_CLOSE`. The session loop is now
+    ///    responsive (we just drained the buffer), so this goes through
+    ///    immediately.
+    ///
+    /// If close fails, the connection is likely broken — escalate to
+    /// [`Self::force_disconnect`].
+    async fn cleanup_timed_out_channel(&self, channel: &mut russh::Channel<client::Msg>) {
+        // Phase 1: drain buffered data to unblock the session loop.
+        // This won't complete naturally (remote keeps sending without a
+        // close signal), so we cap it within a time budget.
+        if tokio::time::timeout(
+            Duration::from_secs(CHANNEL_DRAIN_TIMEOUT_SECS),
+            Self::drain_channel(channel),
+        )
+        .await
+        .is_err()
+        {
+            tracing::debug!(
+                "Channel drain timed out after {CHANNEL_DRAIN_TIMEOUT_SECS}s, \
+                 proceeding to close"
+            );
+        }
+
+        // Phase 2: send close. Session loop should be responsive now.
+        match channel.close().await {
+            Ok(()) => {
+                tracing::debug!("Timed-out channel closed cleanly");
+            }
+            Err(e) => {
+                tracing::warn!("Channel close failed after drain: {e}");
+                self.force_disconnect().await;
+            }
+        }
+    }
+
+    /// Read and discard all remaining channel messages until the channel
+    /// closes. Keeps the session loop's bounded buffer drained so it can
+    /// continue processing other channels and outgoing messages.
+    async fn drain_channel(channel: &mut russh::Channel<client::Msg>) {
+        while channel.wait().await.is_some() {}
+    }
+
+    /// Last-resort cleanup: mark the connection dead and attempt to send
+    /// `SSH_MSG_DISCONNECT` so sshd can immediately clean up child processes.
+    ///
+    /// Both the mutex acquisition and the disconnect send go through an
+    /// aggressive timeout — if the session is saturated (bounded sender
+    /// full), we fall back to `mark_closed()` alone. The connection will be
+    /// evicted from the pool, and when the last `Arc<SshConnection>` drops,
+    /// the sender closes, the session loop exits, and TCP tears down.
+    async fn force_disconnect(&self) {
+        self.mark_closed();
+
+        let result = tokio::time::timeout(Duration::from_secs(DISCONNECT_TIMEOUT_SECS), async {
+            let session = self.session.lock().await;
+            session.disconnect(Disconnect::ByApplication, "", "").await
+        })
+        .await;
+
+        match result {
+            Ok(Ok(())) => {
+                tracing::debug!("SSH disconnect sent successfully");
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("SSH disconnect failed: {e}");
+            }
+            Err(_elapsed) => {
+                tracing::warn!(
+                    "SSH disconnect timed out after {DISCONNECT_TIMEOUT_SECS}s, \
+                     relying on TCP teardown"
+                );
+            }
+        }
     }
 
     /// Drain all output from a channel until it closes.
