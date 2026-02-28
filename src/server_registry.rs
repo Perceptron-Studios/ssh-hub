@@ -134,4 +134,35 @@ impl ServerRegistry {
     pub fn remove(&mut self, name: &str) -> Option<ServerEntry> {
         self.servers.remove(name)
     }
+
+    /// Return server names whose connection-relevant fields changed or that
+    /// were removed compared to `other`. Newly added servers are not included
+    /// (there's no existing connection to evict).
+    #[must_use]
+    pub fn changed_servers(&self, other: &Self) -> Vec<String> {
+        self.servers
+            .iter()
+            .filter_map(|(name, old_entry)| match other.servers.get(name) {
+                None => Some(name.clone()),
+                Some(new_entry) if old_entry.connection_fields_changed(new_entry) => {
+                    Some(name.clone())
+                }
+                Some(_) => None,
+            })
+            .collect()
+    }
+}
+
+impl ServerEntry {
+    /// Compare fields that affect SSH connectivity or the command execution
+    /// context — metadata-only changes don't warrant a reconnection.
+    #[must_use]
+    fn connection_fields_changed(&self, other: &Self) -> bool {
+        self.host != other.host
+            || self.user != other.user
+            || self.port != other.port
+            || self.remote_path != other.remote_path
+            || self.identity != other.identity
+            || self.auth != other.auth
+    }
 }

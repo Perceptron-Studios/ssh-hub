@@ -7,7 +7,7 @@ use crate::connection::SshConnection;
 
 const METADATA_TIMEOUT_MS: u64 = 15_000;
 
-/// Cached system information collected from a remote server via `ssh-hub refresh`.
+/// Cached system information collected from a remote server via `ssh-hub update`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct SystemMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]

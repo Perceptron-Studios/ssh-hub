@@ -12,7 +12,7 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 ## Architecture
 
 - `src/main.rs` — Entry point: init logging, dispatch to CLI or MCP server
-- `src/cli/` — CLI command handlers, one file per command (`add.rs`, `remove.rs`, `list.rs`, `mcp_install.rs`, `update.rs`). `mod.rs` has Clap definitions, connection string parsing, and the `run()` dispatcher
+- `src/cli/` — CLI command handlers, one file per command (`add.rs`, `remove.rs`, `list.rs`, `mcp_install.rs`, `update.rs`, `upgrade.rs`). `mod.rs` has Clap definitions, connection string parsing, and the `run()` dispatcher
 - `src/server.rs` — MCP server (`RemoteSessionServer`) using `rmcp` macros (`#[tool_router]`, `#[tool_handler]`)
 - `src/connection/` — `auth.rs` (agent/key fallback chain, RSA hash negotiation), `session.rs` (SSH session), `pool.rs` (connection pool)
 - `src/tools/` — one module per MCP tool, each with `mod.rs` + `schema.rs` + `handler.rs`. Shared sync types in `sync_types.rs`
@@ -30,14 +30,14 @@ MCP server for remote SSH sessions. Rust binary that exposes remote file ops, sh
 - Blocking I/O (`walk_dir`, `build_tar_gz`, tar extraction, `load_secret_key`) wrapped in `spawn_blocking`
 - `remote_read` with offset/limit uses server-side `sed` — transfers only requested lines
 - CLI output uses `colored` crate — `ok`/`warn`/`failed` status prefixes
-- Self-update via `ssh-hub update` — checks GitHub tags, runs `cargo install --git` if newer version exists
+- Self-upgrade via `ssh-hub upgrade` — checks GitHub tags, runs `cargo install --git` if newer version exists
 
 ## Releasing
 
 1. Bump `version` in `Cargo.toml`
 2. Push to `main`
 3. GitHub Action (`.github/workflows/tag.yml`) auto-creates a `vX.Y.Z` tag if it doesn't exist
-4. Users pick up the new version via `ssh-hub update`
+4. Users pick up the new version via `ssh-hub upgrade`
 
 ## Code quality
 

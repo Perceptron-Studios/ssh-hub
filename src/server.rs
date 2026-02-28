@@ -1,8 +1,10 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use anyhow::Result;
+use futures::future::join_all;
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo};
@@ -20,6 +22,7 @@ use crate::tools;
 pub struct RemoteSessionServer {
     pool: Arc<ConnectionPool>,
     config: Arc<RwLock<ServerRegistry>>,
+    config_mtime: Arc<RwLock<Option<SystemTime>>>,
     tool_router: ToolRouter<Self>,
 }
 
@@ -27,9 +30,15 @@ pub struct RemoteSessionServer {
 impl RemoteSessionServer {
     #[must_use]
     pub fn new(config: ServerRegistry) -> Self {
+        let initial_mtime = ServerRegistry::config_path()
+            .ok()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok());
+
         Self {
             pool: Arc::new(ConnectionPool::new()),
             config: Arc::new(RwLock::new(config)),
+            config_mtime: Arc::new(RwLock::new(initial_mtime)),
             tool_router: Self::tool_router(),
         }
     }
@@ -40,6 +49,7 @@ impl RemoteSessionServer {
         description = "List pre-configured and currently connected servers. Use this to discover available servers before connecting. Includes reachability probe (TCP to SSH port) by default."
     )]
     async fn list_servers(&self, Parameters(input): Parameters<tools::ListServersInput>) -> String {
+        self.maybe_reload_config().await;
         tools::list_servers::handler::handle(&self.pool, &self.config, input).await
     }
 
@@ -134,6 +144,7 @@ impl RemoteSessionServer {
     /// A per-server lock serializes connection establishment so concurrent tool
     /// calls don't race to create duplicate SSH connections.
     async fn with_connection(&self, server: &str, f: impl AsyncConnectionFn) -> String {
+        self.maybe_reload_config().await;
         let conn = match self.resolve_connection(server).await {
             Ok(conn) => conn,
             Err(msg) => return msg,
@@ -208,6 +219,73 @@ impl RemoteSessionServer {
         Ok(self.pool.insert(server.to_string(), conn).await)
     }
 
+    /// Check if the config file has been modified since last load, and reload
+    /// if so. Only evicts connections for servers whose connection-relevant
+    /// fields changed or that were removed — unchanged servers keep their
+    /// pooled connections.
+    async fn maybe_reload_config(&self) {
+        let Ok(path) = ServerRegistry::config_path() else {
+            return;
+        };
+
+        let Ok(current_mtime) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+            return;
+        };
+
+        // Fast path: mtime unchanged (read lock only).
+        {
+            let stored = self.config_mtime.read().await;
+            if *stored == Some(current_mtime) {
+                return;
+            }
+        }
+
+        // Mtime changed — reload config from disk.
+        let new_config = match ServerRegistry::load() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("Config file changed but reload failed: {e}");
+                return;
+            }
+        };
+
+        // Diff old vs new to find servers that need reconnection.
+        let servers_to_evict: Vec<String> = {
+            let old_cfg = self.config.read().await;
+            old_cfg.changed_servers(&new_config)
+        };
+
+        tracing::info!(
+            "Config reloaded ({} servers, {} connections evicted)",
+            new_config.servers.len(),
+            servers_to_evict.len(),
+        );
+
+        // Swap in new config.
+        {
+            let mut cfg = self.config.write().await;
+            *cfg = new_config;
+        }
+
+        // Update stored mtime.
+        {
+            let mut stored = self.config_mtime.write().await;
+            *stored = Some(current_mtime);
+        }
+
+        // Evict and cleanly disconnect changed/removed servers concurrently.
+        if !servers_to_evict.is_empty() {
+            let mut futs = Vec::new();
+            for name in &servers_to_evict {
+                if let Some(conn) = self.pool.remove(name).await {
+                    tracing::debug!("Evicting connection '{name}' (config changed)");
+                    futs.push(async move { conn.disconnect().await });
+                }
+            }
+            join_all(futs).await;
+        }
+    }
+
     /// Run the MCP server on stdio.
     ///
     /// # Errors
@@ -255,7 +333,7 @@ impl ServerHandler for RemoteSessionServer {
                  Workflow: list_servers to discover available servers -> use remote_*/sync_* tools (auto-connects configured servers).\n\
                  All remote_* and sync_* tools require a 'server' parameter — the name of a configured server.\n\
                  Troubleshooting: the `ssh-hub` CLI is available locally for server management \
-                 (add, remove, refresh metadata). Run `ssh-hub --help` for details."
+                 (add, remove, update). Run `ssh-hub --help` for details."
                     .to_string(),
             ),
         }

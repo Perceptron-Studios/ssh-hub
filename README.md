@@ -14,10 +14,10 @@ MCP server that gives AI coding agents full access to remote machines over SSH. 
 cargo install --git https://github.com/Perceptron-Studios/ssh-hub.git
 ```
 
-### Update
+### Upgrade
 
 ```bash
-ssh-hub update
+ssh-hub upgrade
 ```
 
 ## Quick start
@@ -57,8 +57,9 @@ ssh-hub add <SERVER_ALIAS> user@host -i ~/.ssh/my_key
 | `ssh-hub list`                    | List configured servers                         |
 | `ssh-hub add <name> <connection>` | Add a server (tests connection, then saves)     |
 | `ssh-hub remove <name>`           | Remove a server from config                     |
+| `ssh-hub update <name>`           | Update server metadata and connection settings  |
 | `ssh-hub mcp-install [directory]` | Register ssh-hub as MCP server in a project     |
-| `ssh-hub update`                  | Update to the latest release                    |
+| `ssh-hub upgrade`                 | Upgrade to the latest release                   |
 
 **Options:** `-v` verbose logging, `-i <path>` identity file, `-p <port>` port override.
 

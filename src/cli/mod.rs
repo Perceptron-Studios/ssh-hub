@@ -2,10 +2,10 @@ mod add;
 mod connection;
 mod list;
 mod mcp_install;
-mod refresh;
 mod remove;
 mod spinner;
 mod update;
+mod upgrade;
 
 use std::path::PathBuf;
 
@@ -38,17 +38,17 @@ AGENTS:
     If an MCP connection fails or a server is unreachable, use these commands to
     diagnose and fix the issue from your local shell:
 
-    ssh-hub refresh <server>
+    ssh-hub update <server>
       Re-collect system metadata. Also use this to update connection settings
       when a server's IP changes (common in cloud/ephemeral environments):
-        ssh-hub refresh staging --host <new-ip>
-        ssh-hub refresh staging --port <new-port>
+        ssh-hub update staging --host <new-ip>
+        ssh-hub update staging --port <new-port>
 
     ssh-hub add <name> user@host:/path
       Register a new server. Required before MCP tools can reach it.
       Run `ssh-hub add --help` for connection string formats.
 
-    Other commands (list, remove, update, mcp-install) are self-explanatory
+    Other commands (list, remove, upgrade, mcp-install) are self-explanatory
     from the descriptions above.")]
 pub struct Cli {
     /// Enable verbose logging
@@ -130,25 +130,28 @@ EXAMPLES:
         codex: bool,
     },
 
-    /// Refresh server metadata and optionally update connection settings
+    /// Update server metadata and optionally change connection settings
     #[command(long_about = "\
-Refresh server metadata and optionally update connection settings.
+Update server metadata and optionally change connection settings.
 
 Connects to the server and collects system metadata (OS, distro, arch, shell, \
 package manager). Diffs against previously stored values and reports changes.
 
 Connection setting overrides (--host, --port, etc.) are saved to config before \
-connecting — useful for ephemeral networks where server IPs change between sessions.")]
+connecting — useful for ephemeral networks where server IPs change between sessions.
+
+Running MCP server instances automatically pick up config changes on the next \
+tool call — no restart needed.")]
     #[command(after_long_help = "\
 EXAMPLES:
-    ssh-hub refresh staging                       Refresh metadata
-    ssh-hub refresh staging --host 10.0.0.99      Update IP and refresh
-    ssh-hub refresh --all                         Refresh all servers")]
-    Refresh {
-        /// Server name to refresh
+    ssh-hub update staging                       Update metadata
+    ssh-hub update staging --host 10.0.0.99      Update IP and metadata
+    ssh-hub update --all                         Update all servers")]
+    Update {
+        /// Server name to update
         name: Option<String>,
 
-        /// Refresh all configured servers
+        /// Update all configured servers
         #[arg(long)]
         all: bool,
 
@@ -169,11 +172,11 @@ EXAMPLES:
         identity: Option<PathBuf>,
     },
 
-    /// Check for a newer release and install it via cargo install
+    /// Upgrade ssh-hub to the latest release via cargo install
     #[command(long_about = "\
 Check GitHub for a newer release and install it via cargo install --git. \
 Use --check to preview the available version without installing.")]
-    Update {
+    Upgrade {
         /// Check for updates without installing
         #[arg(long)]
         check: bool,
@@ -205,7 +208,7 @@ pub async fn run(command: Command) -> Result<()> {
             codex,
         } => mcp_install::run(&directory, claude, codex),
 
-        Command::Refresh {
+        Command::Update {
             name,
             all,
             host,
@@ -213,15 +216,15 @@ pub async fn run(command: Command) -> Result<()> {
             remote_path,
             identity,
         } => {
-            let overrides = refresh::ConnectionOverrides {
+            let overrides = update::ConnectionOverrides {
                 host,
                 port,
                 remote_path,
                 identity,
             };
-            refresh::run(name, all, overrides).await
+            update::run(name, all, overrides).await
         }
 
-        Command::Update { check } => update::run(check),
+        Command::Upgrade { check } => upgrade::run(check),
     }
 }
