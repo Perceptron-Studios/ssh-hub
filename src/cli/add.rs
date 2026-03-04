@@ -146,12 +146,15 @@ async fn test_and_save(
     let params = params_from_config(name, &entry);
 
     let sp = spinner::start("Establishing connection...");
-    let conn = if let Ok(c) = connection::SshConnection::connect(params).await {
-        spinner::finish_ok(&sp, "Connection established");
-        c
-    } else {
-        spinner::finish_failed(&sp, &format!("Server {name} failed authentication"));
-        return prompt_save_on_failure(name, entry, config);
+    let conn = match connection::SshConnection::connect(params).await {
+        Ok(c) => {
+            spinner::finish_ok(&sp, "Connection established");
+            c
+        }
+        Err(e) => {
+            spinner::finish_failed(&sp, &format!("Connection failed: {e}"));
+            return prompt_save_on_failure(name, entry, config);
+        }
     };
 
     if let Err(e) = conn
@@ -172,8 +175,7 @@ async fn test_and_save(
             entry.metadata = Some(meta);
         }
         Err(e) => {
-            spinner::finish_warn(&sp, "Metadata extraction failed");
-            tracing::debug!("Metadata extraction failed during add: {e}");
+            spinner::finish_warn(&sp, &format!("Metadata extraction failed: {e}"));
         }
     }
 

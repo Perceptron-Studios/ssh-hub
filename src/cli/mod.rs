@@ -101,8 +101,12 @@ EXAMPLES:
         name: String,
     },
 
-    /// List configured servers with connection details and system metadata
-    List,
+    /// List configured servers with connection details, metadata, and reachability
+    List {
+        /// Skip TCP reachability probing
+        #[arg(long)]
+        no_probe: bool,
+    },
 
     /// Register ssh-hub as an MCP server in a project directory
     #[command(name = "mcp-install")]
@@ -200,7 +204,7 @@ pub async fn run(command: Command) -> Result<()> {
 
         Command::Remove { name } => remove::run(&name),
 
-        Command::List => list::run(),
+        Command::List { no_probe } => list::run(no_probe).await,
 
         Command::McpInstall {
             directory,

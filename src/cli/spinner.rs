@@ -13,6 +13,9 @@ const INDENT: &str = "  ";
 /// 256-color index for spinner dots (208 = orange).
 const SPINNER_COLOR: u8 = 208;
 
+/// Braille spinner frames used across all CLI spinners.
+const TICK_STRINGS: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "];
+
 /// Create an indented spinner for sub-operations under a header.
 #[must_use]
 pub fn start(message: impl Into<Cow<'static, str>>) -> ProgressBar {
@@ -32,7 +35,7 @@ fn create(template: &str, message: impl Into<Cow<'static, str>>) -> ProgressBar 
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::default_spinner()
-            .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "])
+            .tick_strings(TICK_STRINGS)
             .template(template)
             .expect("valid template"),
     );

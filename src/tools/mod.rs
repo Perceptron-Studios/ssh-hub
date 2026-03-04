@@ -1,4 +1,3 @@
-pub mod list_servers;
 pub mod remote_bash;
 pub mod remote_edit;
 pub mod remote_glob;
@@ -8,7 +7,6 @@ pub mod sync_pull;
 pub mod sync_push;
 pub mod sync_types;
 // Re-export input types for convenient use in server.rs
-pub use list_servers::ListServersInput;
 pub use remote_bash::RemoteBashInput;
 pub use remote_edit::RemoteEditInput;
 pub use remote_glob::RemoteGlobInput;

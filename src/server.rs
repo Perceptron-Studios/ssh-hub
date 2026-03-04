@@ -43,16 +43,6 @@ impl RemoteSessionServer {
         }
     }
 
-    // ── Management Tools ──────────────────────────────────────────────
-
-    #[tool(
-        description = "List pre-configured and currently connected servers. Use this to discover available servers before connecting. Includes reachability probe (TCP to SSH port) by default."
-    )]
-    async fn list_servers(&self, Parameters(input): Parameters<tools::ListServersInput>) -> String {
-        self.maybe_reload_config().await;
-        tools::list_servers::handler::handle(&self.pool, &self.config, input).await
-    }
-
     // ── Remote Tools ──────────────────────────────────────────────────
 
     #[tool(
@@ -330,10 +320,13 @@ impl ServerHandler for RemoteSessionServer {
                  IMPORTANT: These tools operate on REMOTE servers over SSH — not the local machine. \
                  You already have local tools for local operations. Before using any remote tool, \
                  decide whether the target belongs to the local environment or a remote server.\n\
-                 Workflow: list_servers to discover available servers -> use remote_*/sync_* tools (auto-connects configured servers).\n\
-                 All remote_* and sync_* tools require a 'server' parameter — the name of a configured server.\n\
-                 Troubleshooting: the `ssh-hub` CLI is available locally for server management \
-                 (add, remove, update). Run `ssh-hub --help` for details."
+                 Server discovery: to find available server names, run `ssh-hub list` as a LOCAL \
+                 shell command (via Bash tool), NOT through any MCP tool. This shows configured \
+                 servers with reachability status.\n\
+                 All remote_*/sync_* tools require a 'server' parameter — the name of a configured \
+                 server. Tools auto-connect on first use.\n\
+                 Server management: the `ssh-hub` CLI is available locally for adding, removing, \
+                 and listing servers. Run `ssh-hub --help` for details."
                     .to_string(),
             ),
         }
