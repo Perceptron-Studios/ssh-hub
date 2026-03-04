@@ -1,7 +1,10 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
 use colored::Colorize;
+use tokio::process::Command as TokioCommand;
+use tokio::time::timeout;
 
 use crate::connection::SshConnection;
 use crate::metadata::SystemMetadata;
@@ -11,12 +14,15 @@ use crate::{metadata, metadata::diff};
 use super::params_from_config;
 use super::spinner;
 
+const RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
+
 #[derive(Default)]
 pub struct ConnectionOverrides {
     pub host: Option<String>,
     pub port: Option<u16>,
     pub remote_path: Option<String>,
     pub identity: Option<PathBuf>,
+    pub resolve_host: Option<String>,
 }
 
 impl ConnectionOverrides {
@@ -25,6 +31,7 @@ impl ConnectionOverrides {
             || self.port.is_some()
             || self.remote_path.is_some()
             || self.identity.is_some()
+            || self.resolve_host.is_some()
     }
 }
 
@@ -82,12 +89,104 @@ fn apply_overrides(entry: &mut ServerEntry, overrides: ConnectionOverrides) {
         println!("  {} identity -> {}", "update".blue(), id_str.cyan());
         entry.identity = Some(id_str);
     }
+    if let Some(rh) = overrides.resolve_host {
+        if rh.is_empty() {
+            println!("  {} resolve_host cleared", "update".blue());
+            entry.resolve_host = None;
+        } else {
+            println!("  {} resolve_host -> {}", "update".blue(), rh.cyan());
+            entry.resolve_host = Some(rh);
+        }
+    }
+}
+
+/// Run a shell command that outputs a hostname/IP on stdout.
+///
+/// Returns the trimmed first line of output.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The shell process cannot be spawned
+/// - The command exceeds [`RESOLVE_TIMEOUT`]
+/// - The process exits with a non-zero status
+/// - stdout is empty after trimming
+async fn run_resolve_host(command: &str) -> Result<String> {
+    let child = TokioCommand::new("sh")
+        .args(["-c", command])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow!("Failed to spawn resolve_host command: {e}"))?;
+
+    let output = timeout(RESOLVE_TIMEOUT, child.wait_with_output())
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "resolve_host timed out after {}s",
+                RESOLVE_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|e| anyhow!("resolve_host command failed: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "resolve_host exited with {}: {}",
+            output.status,
+            stderr.trim()
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let host = stdout
+        .lines()
+        .next()
+        .map_or_else(String::new, |line| line.trim().to_string());
+
+    if host.is_empty() {
+        return Err(anyhow!("resolve_host command produced empty output"));
+    }
+
+    Ok(host)
+}
+
+/// Resolve the dynamic host if configured and no explicit `--host` override was given.
+///
+/// On success, updates `entry.host` in place. On failure, prints a warning
+/// and keeps the existing host.
+async fn maybe_resolve_host(entry: &mut ServerEntry, explicit_host: bool) {
+    if explicit_host {
+        return;
+    }
+    let Some(ref cmd) = entry.resolve_host else {
+        return;
+    };
+
+    let sp = spinner::start("Resolving host...");
+    match run_resolve_host(cmd).await {
+        Ok(resolved) if resolved == entry.host => {
+            spinner::finish_ok(&sp, "Host unchanged");
+        }
+        Ok(resolved) => {
+            spinner::finish_ok(
+                &sp,
+                &format!("Host resolved: {} -> {}", entry.host, resolved.cyan()),
+            );
+            entry.host = resolved;
+        }
+        Err(e) => {
+            spinner::finish_warn(&sp, &format!("Host resolve failed: {e}"));
+        }
+    }
 }
 
 async fn update_single(name: &str, config: &mut ServerRegistry, overrides: ConnectionOverrides) {
     println!("{} Updating {}...", ">".blue().bold(), name.bold());
 
-    // Apply overrides and extract what we need, then drop the mutable borrow
+    let explicit_host = overrides.host.is_some();
+
+    // Apply overrides, resolve host if configured, then extract connection params
     let (old_metadata, params) = {
         let Some(entry) = config.servers.get_mut(name) else {
             println!("  {} Server not found", "warn".yellow());
@@ -95,6 +194,8 @@ async fn update_single(name: &str, config: &mut ServerRegistry, overrides: Conne
         };
 
         apply_overrides(entry, overrides);
+        maybe_resolve_host(entry, explicit_host).await;
+
         (entry.metadata.clone(), params_from_config(name, entry))
     };
 

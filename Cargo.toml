@@ -14,7 +14,7 @@ rmcp = { version = "0.13", features = ["server", "transport-io"] }
 russh = "0.50"
 
 # Async runtime
-tokio = { version = "1", features = ["rt", "macros", "fs", "net", "time", "sync", "io-util", "io-std"] }
+tokio = { version = "1", features = ["rt", "macros", "fs", "net", "time", "sync", "io-util", "io-std", "process"] }
 
 # Serialization & schemas
 serde = { version = "1", features = ["derive"] }

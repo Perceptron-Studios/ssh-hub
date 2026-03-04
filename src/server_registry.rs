@@ -27,6 +27,8 @@ pub struct ServerEntry {
     #[serde(default)]
     pub auth: AuthMethod,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolve_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<SystemMetadata>,
 }
 
@@ -156,6 +158,10 @@ impl ServerRegistry {
 impl ServerEntry {
     /// Compare fields that affect SSH connectivity or the command execution
     /// context — metadata-only changes don't warrant a reconnection.
+    ///
+    /// `resolve_host` is intentionally excluded: it is a command that
+    /// *produces* a `host` value during `ssh-hub update`, not a connection
+    /// parameter itself. The resulting `host` change is already detected.
     #[must_use]
     fn connection_fields_changed(&self, other: &Self) -> bool {
         self.host != other.host

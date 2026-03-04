@@ -90,6 +90,9 @@ fn format_metadata(entry: &ServerEntry) -> Option<String> {
 
 fn print_server(name: &str, entry: &ServerEntry) {
     println!("{}", format_server_info(name, entry));
+    if let Some(ref cmd) = entry.resolve_host {
+        println!("  {} {}", "resolve:".dimmed(), cmd.cyan());
+    }
     if let Some(meta) = format_metadata(entry) {
         println!("{meta}");
     }

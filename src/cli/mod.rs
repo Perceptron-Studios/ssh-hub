@@ -44,6 +44,10 @@ AGENTS:
         ssh-hub update staging --host <new-ip>
         ssh-hub update staging --port <new-port>
 
+      For servers with ephemeral IPs, store a resolve command to auto-refresh:
+        ssh-hub update staging --resolve-host \"gcloud compute instances describe ...\"
+      Future `ssh-hub update staging` calls run this command to resolve the IP.
+
     ssh-hub add <name> user@host:/path
       Register a new server. Required before MCP tools can reach it.
       Run `ssh-hub add --help` for connection string formats.
@@ -93,6 +97,10 @@ EXAMPLES:
         /// Path to SSH private key (loaded into ssh-agent via ssh-add)
         #[arg(short = 'i', long)]
         identity: Option<PathBuf>,
+
+        /// Shell command that outputs the current host/IP on stdout (run during `ssh-hub update`)
+        #[arg(long, value_name = "COMMAND")]
+        resolve_host: Option<String>,
     },
 
     /// Remove a server from config. Active MCP sessions are not affected
@@ -148,9 +156,12 @@ Running MCP server instances automatically pick up config changes on the next \
 tool call — no restart needed.")]
     #[command(after_long_help = "\
 EXAMPLES:
-    ssh-hub update staging                       Update metadata
-    ssh-hub update staging --host 10.0.0.99      Update IP and metadata
-    ssh-hub update --all                         Update all servers")]
+    ssh-hub update staging                       Update metadata (runs resolve_host if set)
+    ssh-hub update staging --host 10.0.0.99      Update IP and metadata (skips resolve)
+    ssh-hub update --all                         Update all servers
+    ssh-hub update staging --resolve-host 'gcloud compute instances describe my-vm --format=...'
+                                                 Store a host-resolve command
+    ssh-hub update staging --resolve-host ''     Clear the resolve command")]
     Update {
         /// Server name to update
         name: Option<String>,
@@ -174,6 +185,10 @@ EXAMPLES:
         /// Update the stored SSH private key path before connecting
         #[arg(short = 'i', long)]
         identity: Option<PathBuf>,
+
+        /// Shell command that resolves the current host/IP on stdout (empty string clears)
+        #[arg(long, value_name = "COMMAND")]
+        resolve_host: Option<String>,
     },
 
     /// Upgrade ssh-hub to the latest release via cargo install
@@ -200,7 +215,8 @@ pub async fn run(command: Command) -> Result<()> {
             connection,
             port,
             identity,
-        } => add::run(name, connection, port, identity).await,
+            resolve_host,
+        } => add::run(name, connection, port, identity, resolve_host).await,
 
         Command::Remove { name } => remove::run(&name),
 
@@ -219,12 +235,14 @@ pub async fn run(command: Command) -> Result<()> {
             port,
             remote_path,
             identity,
+            resolve_host,
         } => {
             let overrides = update::ConnectionOverrides {
                 host,
                 port,
                 remote_path,
                 identity,
+                resolve_host,
             };
             update::run(name, all, overrides).await
         }

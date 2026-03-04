@@ -20,6 +20,7 @@ pub async fn run(
     connection: String,
     port: Option<u16>,
     identity: Option<PathBuf>,
+    resolve_host: Option<String>,
 ) -> Result<()> {
     let mut config = ServerRegistry::load()?;
 
@@ -30,6 +31,7 @@ pub async fn run(
     }
 
     let conn_info = parse_connection_string(&connection, port)?;
+    let resolve_host = resolve_host.filter(|s| !s.is_empty());
 
     println!("{} Adding server {}", "+".green().bold(), name.bold(),);
     println!(
@@ -40,6 +42,9 @@ pub async fn run(
         conn_info.port.to_string().cyan(),
     );
     println!("  {}    {}", "path:".dimmed(), conn_info.remote_path.cyan(),);
+    if let Some(ref rh) = resolve_host {
+        println!("  {} {}", "resolve:".dimmed(), rh.cyan());
+    }
 
     if let Some(ref id) = identity {
         add_key_to_agent(id);
@@ -52,6 +57,7 @@ pub async fn run(
         remote_path: conn_info.remote_path,
         identity: identity.map(|p| p.to_string_lossy().to_string()),
         auth: server_registry::AuthMethod::Auto,
+        resolve_host,
         metadata: None,
     };
 

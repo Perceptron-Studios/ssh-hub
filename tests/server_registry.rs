@@ -58,6 +58,7 @@ fn test_roundtrip() {
             remote_path: "/home/test".to_string(),
             identity: None,
             auth: AuthMethod::Auto,
+            resolve_host: None,
             metadata: None,
         },
     );
@@ -100,6 +101,7 @@ fn test_metadata_roundtrip() {
         remote_path: "/home/test".to_string(),
         identity: None,
         auth: AuthMethod::Auto,
+        resolve_host: None,
         metadata: None,
     };
     entry.metadata = Some(SystemMetadata {
@@ -122,4 +124,65 @@ fn test_metadata_roundtrip() {
     assert_eq!(meta.shell.as_deref(), Some("/bin/bash"));
     assert_eq!(meta.package_manager.as_deref(), Some("apt"));
     assert_eq!(meta.collected_at, Some(1_700_000_000));
+}
+
+#[test]
+fn test_resolve_host_roundtrip() {
+    let mut config = ServerRegistry::default();
+    config.insert(
+        "gcp".to_string(),
+        ServerEntry {
+            host: "34.41.145.215".to_string(),
+            user: "deploy".to_string(),
+            port: 22,
+            remote_path: "~".to_string(),
+            identity: None,
+            auth: AuthMethod::Auto,
+            resolve_host: Some("gcloud compute instances describe my-vm --format='get(networkInterfaces[0].accessConfigs[0].natIP)'".to_string()),
+            metadata: None,
+        },
+    );
+
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    let deserialized: ServerRegistry = toml::from_str(&serialized).unwrap();
+
+    let entry = deserialized.get("gcp").unwrap();
+    assert_eq!(
+        entry.resolve_host.as_deref(),
+        Some("gcloud compute instances describe my-vm --format='get(networkInterfaces[0].accessConfigs[0].natIP)'"),
+    );
+}
+
+#[test]
+fn test_resolve_host_backward_compat() {
+    let toml_str = r#"
+[servers.staging]
+host = "staging.example.com"
+user = "deploy"
+remote_path = "/var/www"
+"#;
+    let config: ServerRegistry = toml::from_str(toml_str).unwrap();
+    let staging = config.get("staging").unwrap();
+    assert!(staging.resolve_host.is_none());
+}
+
+#[test]
+fn test_resolve_host_not_serialized_when_none() {
+    let mut config = ServerRegistry::default();
+    config.insert(
+        "test".to_string(),
+        ServerEntry {
+            host: "test.local".to_string(),
+            user: "testuser".to_string(),
+            port: 22,
+            remote_path: "~".to_string(),
+            identity: None,
+            auth: AuthMethod::Auto,
+            resolve_host: None,
+            metadata: None,
+        },
+    );
+
+    let serialized = toml::to_string_pretty(&config).unwrap();
+    assert!(!serialized.contains("resolve_host"));
 }
