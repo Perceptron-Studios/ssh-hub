@@ -30,13 +30,20 @@ const BACKGROUND_TIMEOUT_MS: u64 = 10_000;
 const BYTES_PER_KB: usize = 1_000;
 /// SI megabyte (1,000,000 bytes), used for human-readable size display.
 const BYTES_PER_MB: usize = 1_000_000;
+/// Divisor to extract tenths-of-megabytes for human-readable size formatting.
 const TENTHS_MB_DIVISOR: usize = 100_000;
+
+/// Pre-allocated capacity for the output summary string (32 KB).
+const SUMMARY_BUFFER_CAPACITY: usize = 32 * 1024;
 
 /// Execute a bash command on the remote server.
 ///
 /// Dispatches to foreground or background execution based on `input.run_in_background`.
 /// Rejects commands that attempt shell-level backgrounding without using the
 /// `run_in_background` flag, since those break the SSH channel.
+///
+/// Returns a JSON-serialized [`RemoteBashOutput`] or [`RemoteBashBackgroundOutput`],
+/// or a plain-text error message if the command fails to launch.
 pub async fn handle(conn: Arc<SshConnection>, input: RemoteBashInput) -> String {
     let run_in_background = input.run_in_background.unwrap_or(false);
 
@@ -73,13 +80,22 @@ async fn handle_background(conn: Arc<SshConnection>, input: RemoteBashInput) -> 
     // The fallback works for most cases (FD redirection breaks the pipe
     // connection) but can fail with long-running processes that inherit
     // session membership.
-    let cmd = shell_escape(&input.command);
-    let log = shell_escape(&log_file);
+    //
+    // Output redirection is placed INSIDE `sh -c` via `exec > ... 2>&1`
+    // rather than on the outer command. When the redirect is outside,
+    // the outer shell (session leader) can exit and send SIGHUP to the
+    // child before `setsid` has called `setsid()` — a race the parent
+    // consistently wins because it only runs builtins while the child
+    // must load an external binary. Putting the redirect inside means
+    // the inner shell applies it after `setsid()` has already detached
+    // the process from the old session.
+    let inner = format!("exec > {} 2>&1; {}", shell_escape(&log_file), input.command);
+    let cmd = shell_escape(&inner);
     let wrapped = format!(
         "if command -v setsid >/dev/null 2>&1; then \
-             setsid sh -c {cmd} > {log} 2>&1 < /dev/null & \
+             setsid sh -c {cmd} < /dev/null & \
          else \
-             nohup sh -c {cmd} > {log} 2>&1 < /dev/null & \
+             nohup sh -c {cmd} < /dev/null & \
          fi; echo $!",
     );
 
@@ -105,6 +121,10 @@ async fn handle_background(conn: Arc<SshConnection>, input: RemoteBashInput) -> 
         .unwrap_or_else(|e| format!(r#"{{"error": "serialization failed: {e}"}}"#))
 }
 
+/// Run the command in the foreground and return stdout, stderr, and exit code as JSON.
+///
+/// Stdout larger than [`MAX_INLINE_OUTPUT`] is saved to a local temp file; the response
+/// includes a head/tail summary with the file path.
 async fn handle_foreground(conn: Arc<SshConnection>, input: RemoteBashInput) -> String {
     let timeout = input
         .timeout
@@ -161,14 +181,8 @@ fn build_output_summary(stdout: &str, file_path: &Path) -> String {
     let total_lines = lines.len();
     let total_bytes = stdout.len();
 
-    let size_str = if total_bytes >= BYTES_PER_MB {
-        let tenths_mb = total_bytes / TENTHS_MB_DIVISOR;
-        format!("{}.{} MB", tenths_mb / 10, tenths_mb % 10)
-    } else {
-        format!("{} KB", total_bytes / BYTES_PER_KB)
-    };
-
-    let mut out = String::with_capacity(32 * 1024);
+    let size_str = format_byte_size(total_bytes);
+    let mut out = String::with_capacity(SUMMARY_BUFFER_CAPACITY);
 
     let _ = writeln!(
         out,
@@ -197,6 +211,16 @@ fn build_output_summary(stdout: &str, file_path: &Path) -> String {
     out
 }
 
+/// Format a byte count as a human-readable size string (e.g., "1.3 MB", "450 KB").
+fn format_byte_size(bytes: usize) -> String {
+    if bytes >= BYTES_PER_MB {
+        let tenths_mb = bytes / TENTHS_MB_DIVISOR;
+        format!("{}.{} MB", tenths_mb / 10, tenths_mb % 10)
+    } else {
+        format!("{} KB", bytes / BYTES_PER_KB)
+    }
+}
+
 /// Fallback: truncate stdout at a char boundary when disk write fails.
 fn truncate_inline(stdout: &str) -> String {
     let mut end = MAX_INLINE_OUTPUT;
@@ -219,18 +243,16 @@ pub fn detect_background_pattern(command: &str) -> Option<&'static str> {
     // Check if a keyword appears in command position (start of command or
     // after a shell operator like &&, ||, ;) rather than as an argument.
     let in_command_position = |keyword: &str| -> bool {
-        if trimmed.starts_with(keyword) && trimmed[keyword.len()..].starts_with(' ') {
-            return true;
-        }
-        for sep in ["&& ", "|| ", "; "] {
-            for part in trimmed.split(sep) {
-                let part = part.trim();
-                if part.starts_with(keyword) && part[keyword.len()..].starts_with(' ') {
-                    return true;
-                }
-            }
-        }
-        false
+        let starts_with_keyword = |s: &str| -> bool {
+            s.starts_with(keyword) && s.get(keyword.len()..keyword.len() + 1) == Some(" ")
+        };
+
+        starts_with_keyword(trimmed)
+            || ["&& ", "|| ", "; "].iter().any(|sep| {
+                trimmed
+                    .split(sep)
+                    .any(|part| starts_with_keyword(part.trim()))
+            })
     };
 
     if in_command_position("nohup") {
@@ -243,7 +265,6 @@ pub fn detect_background_pattern(command: &str) -> Option<&'static str> {
 
     // Trailing & (but not &&) — strip common suffixes like `echo $!` and `disown`
     let stripped = trimmed
-        .trim_end()
         .trim_end_matches("echo $!")
         .trim_end_matches(';')
         .trim_end_matches("disown")

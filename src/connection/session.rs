@@ -42,6 +42,12 @@ const CHANNEL_DRAIN_TIMEOUT_SECS: u64 = 4;
 /// TCP teardown when the last `Arc<SshConnection>` is dropped.
 const DISCONNECT_TIMEOUT_SECS: u64 = 2;
 
+/// Timeout for the initial TCP + SSH handshake + authentication.
+/// Without this, connecting to an unreachable host falls back to the OS
+/// TCP timeout (~2 minutes), blocking the per-server connect lock and
+/// stalling all concurrent tool calls to that server.
+const CONNECT_TIMEOUT_SECS: u64 = 15;
+
 /// Parameters needed to establish an SSH connection.
 /// Decoupled from CLI args — can be built from config, MCP tool input, or CLI.
 #[derive(Debug, Clone)]
@@ -157,9 +163,18 @@ impl SshConnection {
         });
         let handler = SshHandler::new(params.host.clone(), params.port);
 
-        let mut session = client::connect(config, (params.host.as_str(), params.port), handler)
-            .await
-            .context("Failed to connect to SSH server")?;
+        let mut session = tokio::time::timeout(
+            Duration::from_secs(CONNECT_TIMEOUT_SECS),
+            client::connect(config, (params.host.as_str(), params.port), handler),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "Connection timed out after {CONNECT_TIMEOUT_SECS}s \
+                 (host may be unreachable)"
+            )
+        })?
+        .context("Failed to connect to SSH server")?;
 
         auth::authenticate(&mut session, &params).await?;
 
